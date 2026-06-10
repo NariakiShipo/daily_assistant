@@ -16,6 +16,26 @@ export const colors = {
   ovulation: '#EEEBFB',
 };
 
+/** 預設行程標籤顏色 */
+export const tagColors: Record<string, string> = {
+  重要: '#E5A33D',
+  完成: '#3FA37A',
+  工作: '#7C6BD6',
+  家庭: '#E8638C',
+};
+
+const tagPalette = [
+  '#4A90D9', '#D9534F', '#2BAFA0', '#B85FA8', '#8A8F4A', '#D97B4A', '#5C7FD9', '#46A35E',
+];
+
+/** 標籤顏色:預設標籤用固定色,自訂標籤依名稱穩定配色 */
+export const tagColor = (tag: string): string => {
+  if (tagColors[tag]) return tagColors[tag];
+  let h = 0;
+  for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) >>> 0;
+  return tagPalette[h % tagPalette.length];
+};
+
 export const userColorChoices = [
   '#E8638C', '#7C6BD6', '#3FA37A', '#E5A33D', '#4A90D9', '#D9534F',
 ];

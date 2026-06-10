@@ -14,6 +14,8 @@ export const defaultData: AppData = {
     notificationsEnabled: false,
     googleConnected: false,
     remindDaysBefore: 3,
+    spaceId: null,
+    customTags: [],
   },
 };
 

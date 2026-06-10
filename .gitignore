@@ -14,6 +14,9 @@ web-build/
 /ios/
 /android/
 
+# ===== 個人機密筆記 =====
+secrets/
+
 # ===== 環境變數 & 機密設定 =====
 .env
 .env.local

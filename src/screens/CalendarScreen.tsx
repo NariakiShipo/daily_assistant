@@ -7,8 +7,8 @@ import {
   View,
 } from 'react-native';
 import { useApp } from '../store/AppContext';
-import { CalendarEvent } from '../types';
-import { colors, radius, spacing } from '../theme';
+import { CalendarEvent, EVENT_TAGS, TAG_DONE } from '../types';
+import { colors, radius, spacing, tagColor } from '../theme';
 import {
   formatMonthZh,
   isWithin,
@@ -23,17 +23,25 @@ import EventModal from '../components/EventModal';
 type ViewMode = 'time' | 'person';
 
 const CalendarScreen: React.FC = () => {
-  const { data, prediction } = useApp();
+  const { data, prediction, updateEvent } = useApp();
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth()); // 0-based
   const [selected, setSelected] = useState(todayKey());
   const [filterUser, setFilterUser] = useState<string | null>(null); // null = 全部
+  const [filterTag, setFilterTag] = useState<string | null>(null); // 標籤名或「未完成」
   const [viewMode, setViewMode] = useState<ViewMode>('time');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<CalendarEvent | null>(null);
 
   const cells = useMemo(() => monthGrid(year, month), [year, month]);
+
+  /** 可篩選標籤 = 預設 + 自訂 + 行程已使用的 */
+  const allTags = useMemo(() => {
+    const set = new Set<string>([...EVENT_TAGS, ...(data.settings.customTags ?? [])]);
+    for (const e of data.events) for (const t of e.tags ?? []) set.add(t);
+    return [...set];
+  }, [data.events, data.settings.customTags]);
   const today = todayKey();
 
   const monthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`;
@@ -42,8 +50,13 @@ const CalendarScreen: React.FC = () => {
       data.events
         .filter((e) => e.date.startsWith(monthPrefix))
         .filter((e) => (filterUser ? e.ownerId === filterUser : true))
+        .filter((e) => {
+          if (!filterTag) return true;
+          if (filterTag === '未完成') return !e.tags?.includes(TAG_DONE);
+          return !!e.tags?.includes(filterTag);
+        })
         .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime)),
-    [data.events, monthPrefix, filterUser]
+    [data.events, monthPrefix, filterUser, filterTag]
   );
 
   const eventsByDate = useMemo(() => {
@@ -79,6 +92,15 @@ const CalendarScreen: React.FC = () => {
       setYear(year + 1);
       setMonth(0);
     } else setMonth(month + 1);
+  };
+
+  /** 切換事件的「完成」標籤 */
+  const toggleDone = (ev: CalendarEvent) => {
+    const cur = ev.tags ?? [];
+    const tags = cur.includes(TAG_DONE)
+      ? cur.filter((t) => t !== TAG_DONE)
+      : [...cur, TAG_DONE];
+    void updateEvent({ ...ev, tags: tags.length ? tags : undefined });
   };
 
   const openNew = () => {
@@ -124,6 +146,20 @@ const CalendarScreen: React.FC = () => {
             color={colors.accent}
             onPress={() => setViewMode(viewMode === 'time' ? 'person' : 'time')}
           />
+        </View>
+
+        {/* 標籤篩選 */}
+        <View style={s.filterRow}>
+          <Text style={s.filterLabel}>標籤:</Text>
+          {[...allTags, '未完成'].map((t) => (
+            <Chip
+              key={t}
+              label={t}
+              color={t === '未完成' ? colors.textMuted : tagColor(t)}
+              active={filterTag === t}
+              onPress={() => setFilterTag(filterTag === t ? null : t)}
+            />
+          ))}
         </View>
 
         {/* 月曆格 */}
@@ -190,7 +226,14 @@ const CalendarScreen: React.FC = () => {
               <Text style={s.empty}>這天沒有行程,點右下角 + 新增。</Text>
             )}
             {selectedEvents.map((e) => (
-              <EventRow key={e.id} ev={e} color={userOf(e.ownerId)?.color} ownerName={userOf(e.ownerId)?.name} onPress={() => openEdit(e)} />
+              <EventRow
+                key={e.id}
+                ev={e}
+                color={userOf(e.ownerId)?.color}
+                ownerName={userOf(e.ownerId)?.name}
+                onPress={() => openEdit(e)}
+                onToggleDone={() => toggleDone(e)}
+              />
             ))}
           </>
         ) : (
@@ -207,7 +250,14 @@ const CalendarScreen: React.FC = () => {
                     </SectionTitle>
                     {evs.length === 0 && <Text style={s.empty}>本月沒有行程</Text>}
                     {evs.map((e) => (
-                      <EventRow key={e.id} ev={e} color={u.color} showDate onPress={() => openEdit(e)} />
+                      <EventRow
+                        key={e.id}
+                        ev={e}
+                        color={u.color}
+                        showDate
+                        onPress={() => openEdit(e)}
+                        onToggleDone={() => toggleDone(e)}
+                      />
                     ))}
                   </View>
                 );
@@ -237,25 +287,44 @@ const EventRow: React.FC<{
   ownerName?: string;
   showDate?: boolean;
   onPress: () => void;
-}> = ({ ev, color = colors.primary, ownerName, showDate, onPress }) => (
-  <TouchableOpacity onPress={onPress}>
-    <Card style={{ padding: spacing.md, marginBottom: spacing.sm }}>
-      <View style={s.eventRow}>
-        <View style={[s.eventBar, { backgroundColor: color }]} />
-        <View style={{ flex: 1 }}>
-          <Text style={s.eventTitle}>{ev.title}</Text>
-          <Text style={s.eventMeta}>
-            {showDate ? `${ev.date}  ` : ''}
-            {ev.startTime} – {ev.endTime}
-            {ownerName ? `  ·  ${ownerName}` : ''}
-            {ev.googleEventId ? '  ·  已同步 G 日曆' : ev.syncToGoogle ? '  ·  待同步' : ''}
-          </Text>
-          {!!ev.notes && <Text style={s.eventNotes}>{ev.notes}</Text>}
+  onToggleDone: () => void;
+}> = ({ ev, color = colors.primary, ownerName, showDate, onPress, onToggleDone }) => {
+  const done = !!ev.tags?.includes(TAG_DONE);
+  const badges = (ev.tags ?? []).filter((t) => t !== TAG_DONE);
+  return (
+    <TouchableOpacity onPress={onPress}>
+      <Card style={{ padding: spacing.md, marginBottom: spacing.sm }}>
+        <View style={s.eventRow}>
+          <View style={[s.eventBar, { backgroundColor: color }]} />
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
+              <Text style={[s.eventTitle, done && s.eventTitleDone]}>{ev.title}</Text>
+              {badges.map((t) => (
+                <View key={t} style={[s.tagBadge, { backgroundColor: tagColor(t) }]}>
+                  <Text style={s.tagBadgeText}>{t}</Text>
+                </View>
+              ))}
+            </View>
+            <Text style={s.eventMeta}>
+              {showDate ? `${ev.date}  ` : ''}
+              {ev.startTime} – {ev.endTime}
+              {ownerName ? `  ·  ${ownerName}` : ''}
+              {ev.googleEventId ? '  ·  已同步 G 日曆' : ev.syncToGoogle ? '  ·  待同步' : ''}
+            </Text>
+            {!!ev.notes && <Text style={s.eventNotes}>{ev.notes}</Text>}
+          </View>
+          <TouchableOpacity
+            style={[s.doneBtn, done && s.doneBtnActive]}
+            onPress={onToggleDone}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={[s.doneBtnText, done && { color: '#fff' }]}>✓</Text>
+          </TouchableOpacity>
         </View>
-      </View>
-    </Card>
-  </TouchableOpacity>
-);
+      </Card>
+    </TouchableOpacity>
+  );
+};
 
 const CELL = `${100 / 7}%` as const;
 
@@ -315,7 +384,31 @@ const s = StyleSheet.create({
   empty: { color: colors.textMuted, fontSize: 13, marginBottom: spacing.md },
   eventRow: { flexDirection: 'row', alignItems: 'center' },
   eventBar: { width: 4, alignSelf: 'stretch', borderRadius: 2, marginRight: spacing.md },
+  filterLabel: { fontSize: 13, color: colors.textMuted, marginRight: spacing.xs },
   eventTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
+  eventTitleDone: {
+    textDecorationLine: 'line-through',
+    color: colors.textMuted,
+  },
+  tagBadge: {
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    marginLeft: 6,
+  },
+  tagBadgeText: { fontSize: 11, color: '#fff', fontWeight: '700' },
+  doneBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: spacing.sm,
+  },
+  doneBtnActive: { backgroundColor: colors.success, borderColor: colors.success },
+  doneBtnText: { fontSize: 14, color: colors.border, fontWeight: '700' },
   eventMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   eventNotes: { fontSize: 12, color: colors.textMuted, marginTop: 4, fontStyle: 'italic' },
   fab: {

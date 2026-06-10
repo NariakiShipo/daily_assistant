@@ -26,7 +26,15 @@ export interface CalendarEvent {
   googleEventId?: string;
   /** 是否要求同步至 Google Calendar */
   syncToGoogle?: boolean;
+  /** 標籤(重要、完成⋯),可複選 */
+  tags?: string[];
 }
+
+/** 預設可選的行程標籤 */
+export const EVENT_TAGS = ['重要', '完成', '工作', '家庭'] as const;
+
+/** 完成標籤(用於完成狀態切換與「未完成」篩選) */
+export const TAG_DONE = '完成';
 
 export type FlowLevel = 'light' | 'medium' | 'heavy';
 
@@ -67,6 +75,10 @@ export interface AppSettings {
   googleConnected: boolean;
   /** 經期前幾天提醒 */
   remindDaysBefore: number;
+  /** Firebase 共享空間配對碼(null = 本機模式) */
+  spaceId?: string | null;
+  /** 使用者自訂的行程標籤 */
+  customTags?: string[];
 }
 
 export interface AppData {

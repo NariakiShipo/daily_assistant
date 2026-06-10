@@ -1,39 +1,43 @@
 /**
- * Google Calendar 同步模組(MVP:REST 接口已就緒,OAuth 待接)
+ * Google Calendar 同步(REST)
  *
- * 正式接入步驟:
- * 1. 到 Google Cloud Console 建立專案,啟用 Google Calendar API
- * 2. 建立 OAuth 2.0 用戶端(iOS / Android / Web 各一)
- * 3. 安裝 expo-auth-session,用以下 scope 取得 access token:
- *    https://www.googleapis.com/auth/calendar
- * 4. 呼叫 setAccessToken(token) 後,以下函式即可實際運作
+ * Token 來源優先序:
+ * 1. 設定頁手動貼上的測試 token
+ * 2. OAuth 登入後儲存的 token(過期自動刷新,見 googleAuth.ts)
  *
- * 共同編輯同個日曆的做法:
- * - 主要使用者建立一個專用日曆(createSharedCalendar)
- * - 透過 ACL 將伴侶的 Google 帳號加為 writer(shareCalendarWith)
- * - 雙方的 App 都對同一 calendarId 讀寫
+ * 共同編輯同個日曆:
+ * - createSharedCalendar() 建立專用日曆
+ * - shareCalendarWith(對方email) 將對方加為 writer
+ * - 雙方對同一 calendarId 讀寫
  */
 import { CalendarEvent } from '../types';
+import { getValidAccessToken } from './googleAuth';
 
 const API = 'https://www.googleapis.com/calendar/v3';
 
-let accessToken: string | null = null;
+let manualToken: string | null = null;
 let calendarId = 'primary';
 
+/** 設定頁手動貼 token 用(開發測試) */
 export function setAccessToken(token: string | null): void {
-  accessToken = token;
-}
-
-export function isConnected(): boolean {
-  return accessToken !== null;
+  manualToken = token;
 }
 
 export function setCalendarId(id: string): void {
   calendarId = id;
 }
 
-const headers = () => ({
-  Authorization: `Bearer ${accessToken}`,
+async function getToken(): Promise<string | null> {
+  return manualToken ?? (await getValidAccessToken());
+}
+
+/** 是否有可用的 token(含 OAuth 自動刷新) */
+export async function isConnectedAsync(): Promise<boolean> {
+  return (await getToken()) !== null;
+}
+
+const headers = (token: string) => ({
+  Authorization: `Bearer ${token}`,
   'Content-Type': 'application/json',
 });
 
@@ -44,15 +48,16 @@ const toGoogleEvent = (ev: CalendarEvent) => ({
   end: { dateTime: `${ev.date}T${ev.endTime}:00`, timeZone: 'Asia/Taipei' },
 });
 
-/** 將事件推送至 Google Calendar,回傳 googleEventId(未連接時回傳 null) */
+/** 推送事件至 Google Calendar,回傳 googleEventId(無 token 時回傳 null) */
 export async function pushEvent(ev: CalendarEvent): Promise<string | null> {
-  if (!accessToken) return null;
+  const token = await getToken();
+  if (!token) return null;
   const url = ev.googleEventId
     ? `${API}/calendars/${encodeURIComponent(calendarId)}/events/${ev.googleEventId}`
     : `${API}/calendars/${encodeURIComponent(calendarId)}/events`;
   const res = await fetch(url, {
     method: ev.googleEventId ? 'PUT' : 'POST',
-    headers: headers(),
+    headers: headers(token),
     body: JSON.stringify(toGoogleEvent(ev)),
   });
   if (!res.ok) throw new Error(`Google Calendar 同步失敗:${res.status}`);
@@ -61,19 +66,21 @@ export async function pushEvent(ev: CalendarEvent): Promise<string | null> {
 }
 
 export async function deleteEvent(googleEventId: string): Promise<void> {
-  if (!accessToken) return;
-  await fetch(
-    `${API}/calendars/${encodeURIComponent(calendarId)}/events/${googleEventId}`,
-    { method: 'DELETE', headers: headers() }
-  );
+  const token = await getToken();
+  if (!token) return;
+  await fetch(`${API}/calendars/${encodeURIComponent(calendarId)}/events/${googleEventId}`, {
+    method: 'DELETE',
+    headers: headers(token),
+  });
 }
 
 /** 建立共用日曆,回傳 calendarId */
 export async function createSharedCalendar(name: string): Promise<string | null> {
-  if (!accessToken) return null;
+  const token = await getToken();
+  if (!token) return null;
   const res = await fetch(`${API}/calendars`, {
     method: 'POST',
-    headers: headers(),
+    headers: headers(token),
     body: JSON.stringify({ summary: name, timeZone: 'Asia/Taipei' }),
   });
   if (!res.ok) throw new Error(`建立日曆失敗:${res.status}`);
@@ -83,14 +90,12 @@ export async function createSharedCalendar(name: string): Promise<string | null>
 
 /** 將日曆分享給另一人(writer 權限,可共同編輯) */
 export async function shareCalendarWith(email: string): Promise<void> {
-  if (!accessToken) return;
+  const token = await getToken();
+  if (!token) return;
   const res = await fetch(`${API}/calendars/${encodeURIComponent(calendarId)}/acl`, {
     method: 'POST',
-    headers: headers(),
-    body: JSON.stringify({
-      role: 'writer',
-      scope: { type: 'user', value: email },
-    }),
+    headers: headers(token),
+    body: JSON.stringify({ role: 'writer', scope: { type: 'user', value: email } }),
   });
   if (!res.ok) throw new Error(`分享日曆失敗:${res.status}`);
 }

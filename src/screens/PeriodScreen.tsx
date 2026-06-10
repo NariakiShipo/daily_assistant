@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -9,49 +8,87 @@ import {
 } from 'react-native';
 import { useApp } from '../store/AppContext';
 import { PeriodRecord } from '../types';
-import { colors, radius, spacing } from '../theme';
-import { daysBetween, formatDateZh, todayKey, uid } from '../utils/date';
+import { colors, spacing } from '../theme';
+import { addDays, daysBetween, formatDateZh, isValidDateKey, isWithin, todayKey, uid } from '../utils/date';
+import { confirmDialog, notify } from '../utils/dialog';
 import { phaseNameZh } from '../services/periodPrediction';
 import { recommendations } from '../services/recommendations';
 import { Button, Card, Chip, SectionTitle } from '../components/ui';
+import PeriodEditModal from '../components/PeriodEditModal';
+import MiniCalendar from '../components/MiniCalendar';
 
 const PeriodScreen: React.FC = () => {
   const { data, prediction, phase, addPeriod, updatePeriod, deletePeriod } = useApp();
   const [recorder, setRecorder] = useState(data.users[0]?.id ?? 'u1');
 
   const today = todayKey();
+  const [recordDate, setRecordDate] = useState(today);
+  const [editing, setEditing] = useState<PeriodRecord | null>(null);
   const sorted = useMemo(
     () => [...data.periods].sort((a, b) => b.startDate.localeCompare(a.startDate)),
     [data.periods]
   );
   const ongoing = sorted.find((p) => !p.endDate);
 
+  /** 已記錄的經期日(供記錄日曆參考顯示) */
+  const periodDays = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of data.periods) {
+      const end = p.endDate ?? addDays(p.startDate, 4);
+      let d = p.startDate;
+      while (d <= end) {
+        set.add(d);
+        d = addDays(d, 1);
+      }
+    }
+    return set;
+  }, [data.periods]);
+
   const recorderName = (id: string) => data.users.find((u) => u.id === id)?.name ?? '?';
+
+  const validRecordDate = (): boolean => {
+    if (!isValidDateKey(recordDate)) {
+      notify('日期格式錯誤', '請用 YYYY-MM-DD');
+      return false;
+    }
+    if (recordDate > today) {
+      notify('日期不能在未來');
+      return false;
+    }
+    return true;
+  };
 
   const startPeriod = () => {
     if (ongoing) {
-      return Alert.alert('已有進行中的紀錄', '請先記錄上一次經期結束。');
+      return notify('已有進行中的紀錄', '請先記錄上一次經期結束。');
     }
+    if (!validRecordDate()) return;
     const rec: PeriodRecord = {
       id: uid(),
-      startDate: today,
+      startDate: recordDate,
       recordedBy: recorder,
     };
     addPeriod(rec);
-    Alert.alert('已記錄', `經期開始:${formatDateZh(today)}(由 ${recorderName(recorder)} 記錄)`);
+    notify('已記錄', `經期開始:${formatDateZh(recordDate)}(由 ${recorderName(recorder)} 記錄)`);
   };
 
   const endPeriod = () => {
     if (!ongoing) return;
-    updatePeriod({ ...ongoing, endDate: today });
-    Alert.alert('已記錄', `經期結束:${formatDateZh(today)}`);
+    if (!validRecordDate()) return;
+    if (recordDate < ongoing.startDate) {
+      return notify('結束日期不能早於開始日期', `這次經期從 ${formatDateZh(ongoing.startDate)} 開始。`);
+    }
+    updatePeriod({ ...ongoing, endDate: recordDate });
+    notify('已記錄', `經期結束:${formatDateZh(recordDate)}`);
   };
 
   const removeRecord = (p: PeriodRecord) => {
-    Alert.alert('刪除紀錄', `刪除 ${formatDateZh(p.startDate)} 開始的紀錄?`, [
-      { text: '取消', style: 'cancel' },
-      { text: '刪除', style: 'destructive', onPress: () => deletePeriod(p.id) },
-    ]);
+    confirmDialog(
+      '刪除紀錄',
+      `刪除 ${formatDateZh(p.startDate)} 開始的紀錄?`,
+      () => deletePeriod(p.id),
+      { confirmLabel: '刪除', destructive: true }
+    );
   };
 
   const rec = phase ? recommendations[phase.phase] : null;
@@ -98,6 +135,25 @@ const PeriodScreen: React.FC = () => {
             信心程度:{{ low: '低(紀錄越多越準)', medium: '中', high: '高' }[prediction.confidence]}
             (採用 {prediction.sampleCount} 個週期樣本)
           </Text>
+          <View style={{ marginTop: spacing.md }}>
+            <MiniCalendar
+              key={prediction.nextStart}
+              initialMonth={prediction.nextStart}
+              getMark={(key) => {
+                if (key === prediction.nextStart)
+                  return { bg: colors.periodDay, border: colors.primary };
+                if (key === prediction.ovulationDate) return { bg: colors.ovulation };
+                if (isWithin(key, prediction.windowStart, prediction.windowEnd))
+                  return { bg: colors.predictedDay };
+                return undefined;
+              }}
+              legend={[
+                { color: colors.periodDay, label: '最可能開始日' },
+                { color: colors.predictedDay, label: '可能區間' },
+                { color: colors.ovulation, label: '排卵日' },
+              ]}
+            />
+          </View>
         </Card>
       )}
 
@@ -116,10 +172,30 @@ const PeriodScreen: React.FC = () => {
             />
           ))}
         </View>
+        <Text style={s.label}>點選日曆選擇記錄日期(粉色為已記錄的經期日)</Text>
+        <MiniCalendar
+          selected={recordDate}
+          onSelect={setRecordDate}
+          maxDate={today}
+          getMark={(key) =>
+            periodDays.has(key) ? { bg: colors.periodDay } : undefined
+          }
+        />
+        {recordDate !== today && (
+          <View style={{ flexDirection: 'row', marginTop: spacing.sm }}>
+            <Chip label="回到今天" onPress={() => setRecordDate(today)} />
+          </View>
+        )}
         {!ongoing ? (
-          <Button label={`記錄今天經期開始(${formatDateZh(today)})`} onPress={startPeriod} />
+          <Button
+            label={`記錄經期開始(${isValidDateKey(recordDate) ? formatDateZh(recordDate) : recordDate})`}
+            onPress={startPeriod}
+          />
         ) : (
-          <Button label={`記錄今天經期結束(${formatDateZh(today)})`} onPress={endPeriod} />
+          <Button
+            label={`記錄經期結束(${isValidDateKey(recordDate) ? formatDateZh(recordDate) : recordDate})`}
+            onPress={endPeriod}
+          />
         )}
       </Card>
 
@@ -153,7 +229,7 @@ const PeriodScreen: React.FC = () => {
       <SectionTitle>歷史紀錄({sorted.length})</SectionTitle>
       {sorted.length === 0 && <Text style={s.empty}>尚無紀錄</Text>}
       {sorted.map((p) => (
-        <TouchableOpacity key={p.id} onLongPress={() => removeRecord(p)}>
+        <TouchableOpacity key={p.id} onPress={() => setEditing(p)} onLongPress={() => removeRecord(p)}>
           <Card style={{ padding: spacing.md, marginBottom: spacing.sm }}>
             <Text style={s.historyMain}>
               {formatDateZh(p.startDate)}
@@ -161,10 +237,12 @@ const PeriodScreen: React.FC = () => {
                 ? ` – ${formatDateZh(p.endDate)}(${daysBetween(p.startDate, p.endDate) + 1} 天)`
                 : ' – 進行中'}
             </Text>
-            <Text style={s.historyMeta}>由 {recorderName(p.recordedBy)} 記錄(長按可刪除)</Text>
+            <Text style={s.historyMeta}>由 {recorderName(p.recordedBy)} 記錄(點一下編輯,長按刪除)</Text>
           </Card>
         </TouchableOpacity>
       ))}
+
+      <PeriodEditModal visible={!!editing} record={editing} onClose={() => setEditing(null)} />
     </ScrollView>
   );
 };

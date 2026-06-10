@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -12,12 +11,12 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { CalendarEvent } from '../types';
-import { colors, radius, spacing } from '../theme';
+import { CalendarEvent, EVENT_TAGS } from '../types';
+import { colors, radius, spacing, tagColor } from '../theme';
 import { isValidDateKey, isValidTime, uid } from '../utils/date';
+import { confirmDialog, notify } from '../utils/dialog';
 import { useApp } from '../store/AppContext';
 import { Button, Chip } from './ui';
-import * as gcal from '../services/googleCalendar';
 
 interface Props {
   visible: boolean;
@@ -29,7 +28,7 @@ interface Props {
 }
 
 const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) => {
-  const { data, addEvent, updateEvent, deleteEvent } = useApp();
+  const { data, addEvent, updateEvent, deleteEvent, addCustomTag, removeCustomTag } = useApp();
 
   const [title, setTitle] = useState('');
   const [date, setDate] = useState(defaultDate);
@@ -37,7 +36,44 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
   const [endTime, setEndTime] = useState('10:00');
   const [ownerId, setOwnerId] = useState(data.users[0]?.id ?? 'u1');
   const [notes, setNotes] = useState('');
+  const [tags, setTags] = useState<string[]>([]);
+  const [newTag, setNewTag] = useState('');
   const [syncToGoogle, setSyncToGoogle] = useState(false);
+
+  const toggleTag = (t: string) =>
+    setTags((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
+
+  const customTags = data.settings.customTags ?? [];
+  /** 可選標籤 = 預設 + 自訂 + 既有行程已使用的(共享模式下對方建立的也會出現) */
+  const allTags = [
+    ...new Set([
+      ...EVENT_TAGS,
+      ...customTags,
+      ...data.events.flatMap((e) => e.tags ?? []),
+      ...tags,
+    ]),
+  ];
+
+  const addNewTag = () => {
+    const name = newTag.trim();
+    if (!name) return;
+    if (name.length > 8) return notify('標籤名稱太長', '請用 8 個字以內。');
+    if (!allTags.includes(name)) addCustomTag(name);
+    if (!tags.includes(name)) setTags((cur) => [...cur, name]);
+    setNewTag('');
+  };
+
+  const removeCustom = (t: string) => {
+    confirmDialog(
+      '移除自訂標籤',
+      `「${t}」會從可選清單移除,已加在行程上的標籤不受影響。`,
+      () => {
+        removeCustomTag(t);
+        setTags((cur) => cur.filter((x) => x !== t));
+      },
+      { confirmLabel: '移除', destructive: true }
+    );
+  };
 
   useEffect(() => {
     if (!visible) return;
@@ -48,6 +84,7 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       setEndTime(event.endTime);
       setOwnerId(event.ownerId);
       setNotes(event.notes ?? '');
+      setTags(event.tags ?? []);
       setSyncToGoogle(!!event.syncToGoogle);
     } else {
       setTitle('');
@@ -56,16 +93,18 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       setEndTime('10:00');
       setOwnerId(data.users[0]?.id ?? 'u1');
       setNotes('');
+      setTags([]);
+      setNewTag('');
       setSyncToGoogle(false);
     }
   }, [visible, event, defaultDate, data.users]);
 
   const save = async () => {
-    if (!title.trim()) return Alert.alert('請輸入標題');
-    if (!isValidDateKey(date)) return Alert.alert('日期格式錯誤', '請用 YYYY-MM-DD');
+    if (!title.trim()) return notify('請輸入標題');
+    if (!isValidDateKey(date)) return notify('日期格式錯誤', '請用 YYYY-MM-DD');
     if (!isValidTime(startTime) || !isValidTime(endTime))
-      return Alert.alert('時間格式錯誤', '請用 HH:MM(24 小時制)');
-    if (endTime <= startTime) return Alert.alert('結束時間需晚於開始時間');
+      return notify('時間格式錯誤', '請用 HH:MM(24 小時制)');
+    if (endTime <= startTime) return notify('結束時間需晚於開始時間');
 
     const ev: CalendarEvent = {
       id: event?.id ?? uid(),
@@ -76,6 +115,7 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       ownerId,
       createdBy: event?.createdBy ?? data.users[0]?.id ?? 'u1',
       notes: notes.trim() || undefined,
+      tags: tags.length ? tags : undefined,
       syncToGoogle,
       googleEventId: event?.googleEventId,
     };
@@ -86,17 +126,14 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
 
   const remove = () => {
     if (!event) return;
-    Alert.alert('刪除行程', `確定刪除「${event.title}」?`, [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '刪除',
-        style: 'destructive',
-        onPress: async () => {
-          await deleteEvent(event.id);
-          onClose();
-        },
+    confirmDialog(
+      '刪除行程',
+      `確定刪除「${event.title}」?`,
+      () => {
+        void deleteEvent(event.id).then(onClose);
       },
-    ]);
+      { confirmLabel: '刪除', destructive: true }
+    );
   };
 
   return (
@@ -149,6 +186,33 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
               ))}
             </View>
 
+            <Text style={s.label}>標籤(可複選;長按自訂標籤可移除)</Text>
+            <View style={s.chips}>
+              {allTags.map((t) => (
+                <Chip
+                  key={t}
+                  label={t}
+                  color={tagColor(t)}
+                  active={tags.includes(t)}
+                  onPress={() => toggleTag(t)}
+                  onLongPress={customTags.includes(t) ? () => removeCustom(t) : undefined}
+                />
+              ))}
+            </View>
+            <View style={s.row}>
+              <TextInput
+                style={[s.input, { flex: 1 }]}
+                value={newTag}
+                onChangeText={setNewTag}
+                placeholder="新增自訂標籤,例如:約會"
+                placeholderTextColor={colors.textMuted}
+                onSubmitEditing={addNewTag}
+              />
+              <TouchableOpacity style={s.addTagBtn} onPress={addNewTag}>
+                <Text style={s.addTagBtnText}>＋ 新增</Text>
+              </TouchableOpacity>
+            </View>
+
             <Text style={s.label}>備註</Text>
             <TextInput
               style={[s.input, { height: 64 }]}
@@ -162,8 +226,8 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
               <Switch
                 value={syncToGoogle}
                 onValueChange={(v) => {
-                  if (v && !gcal.isConnected()) {
-                    Alert.alert('尚未連接', '請先到「設定」頁連接 Google Calendar。仍會標記此行程待同步。');
+                  if (v && !data.settings.googleConnected) {
+                    notify('尚未連接', '請先到「設定」頁連接 Google Calendar。仍會標記此行程待同步。');
                   }
                   setSyncToGoogle(v);
                 }}
@@ -209,7 +273,14 @@ const s = StyleSheet.create({
     fontSize: 15,
     color: colors.text,
   },
-  row: { flexDirection: 'row', gap: spacing.md },
+  row: { flexDirection: 'row', gap: spacing.md, alignItems: 'center' },
+  addTagBtn: {
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+  },
+  addTagBtnText: { color: colors.primary, fontSize: 14, fontWeight: '700' },
   half: { flex: 1 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.xs },
   switchRow: {

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
-  Alert,
   ScrollView,
+  Share,
   StyleSheet,
   Switch,
   Text,
@@ -13,34 +13,75 @@ import { useApp } from '../store/AppContext';
 import { colors, radius, spacing, userColorChoices } from '../theme';
 import { Button, Card, SectionTitle } from '../components/ui';
 import { sendTestNotification } from '../services/notifications';
+import { useGoogleAuth, signOutGoogle } from '../services/googleAuth';
+import { confirmDialog, notify } from '../utils/dialog';
 
 const SettingsScreen: React.FC = () => {
-  const { data, updateUser, setNotificationsEnabled, setGoogleToken, resetAll } = useApp();
+  const {
+    data,
+    shared,
+    firebaseAvailable,
+    updateUser,
+    setNotificationsEnabled,
+    setGoogleToken,
+    setGoogleConnected,
+    createSharedSpace,
+    joinSharedSpace,
+    leaveSharedSpace,
+    resetAll,
+  } = useApp();
   const [token, setToken] = useState('');
+  const [joinCode, setJoinCode] = useState('');
+  const [working, setWorking] = useState(false);
 
-  const connectGoogle = () => {
-    if (!token.trim()) {
-      Alert.alert(
-        '連接 Google Calendar',
-        '正式版會走 OAuth 登入流程(expo-auth-session)。\n\n' +
-          '開發測試:到 developers.google.com/oauthplayground 勾選 Calendar API v3 取得 Access Token,貼到上方欄位即可測試同步。'
-      );
-      return;
-    }
-    setGoogleToken(token.trim());
-    Alert.alert('已連接', '行程開啟「同步到 Google 日曆」後會自動同步。');
-  };
+  const google = useGoogleAuth((ok) => {
+    setGoogleConnected(ok);
+    notify(ok ? '已連接 Google' : '連接失敗', ok ? '行程可自動同步到 Google 日曆了。' : '請確認 config.ts 的用戶端 ID 與平台設定。');
+  });
 
   const disconnectGoogle = () => {
+    void signOutGoogle();
     setGoogleToken(null);
     setToken('');
   };
 
+  const onCreateSpace = async () => {
+    setWorking(true);
+    try {
+      const code = await createSharedSpace();
+      notify('共享空間已建立', `配對碼:${code}\n\n請把配對碼傳給對方,在另一台裝置輸入即可同步。`);
+    } catch (e) {
+      notify('建立失敗', String(e));
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const onJoinSpace = async () => {
+    if (!joinCode.trim()) return;
+    setWorking(true);
+    try {
+      const ok = await joinSharedSpace(joinCode);
+      notify(ok ? '已加入' : '找不到此配對碼', ok ? '兩台裝置的資料會即時同步。' : '請確認配對碼是否正確。');
+      if (ok) setJoinCode('');
+    } catch (e) {
+      notify('加入失敗', String(e));
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const shareCode = () => {
+    if (data.settings.spaceId) {
+      void Share.share({ message: `Daily Assistant 配對碼:${data.settings.spaceId}` });
+    }
+  };
+
   const confirmReset = () => {
-    Alert.alert('清除所有資料', '行程與經期紀錄都會刪除,確定嗎?', [
-      { text: '取消', style: 'cancel' },
-      { text: '清除', style: 'destructive', onPress: () => void resetAll() },
-    ]);
+    confirmDialog('清除所有資料', '行程與經期紀錄都會刪除,確定嗎?', () => void resetAll(), {
+      confirmLabel: '清除',
+      destructive: true,
+    });
   };
 
   return (
@@ -52,7 +93,8 @@ const SettingsScreen: React.FC = () => {
       <Card>
         <SectionTitle>成員設定</SectionTitle>
         <Text style={s.hint}>
-          兩位成員共用這份日曆與經期紀錄。行程與紀錄都會標記是誰的/誰記的。
+          兩位成員共用日曆與經期紀錄,行程與紀錄都會標記是誰的/誰記的。
+          {shared ? '名稱與顏色會同步到對方裝置。' : ''}
         </Text>
         {data.users.map((u) => (
           <View key={u.id} style={s.userRow}>
@@ -65,11 +107,7 @@ const SettingsScreen: React.FC = () => {
               {userColorChoices.map((c) => (
                 <TouchableOpacity
                   key={c}
-                  style={[
-                    s.swatch,
-                    { backgroundColor: c },
-                    u.color === c && s.swatchActive,
-                  ]}
+                  style={[s.swatch, { backgroundColor: c }, u.color === c && s.swatchActive]}
                   onPress={() => updateUser({ ...u, color: c })}
                 />
               ))}
@@ -77,6 +115,89 @@ const SettingsScreen: React.FC = () => {
             {u.isPrimary && <Text style={s.primaryTag}>經期紀錄對象</Text>}
           </View>
         ))}
+      </Card>
+
+      {/* 跨裝置共享 */}
+      <Card>
+        <SectionTitle>跨裝置共享(Firebase)</SectionTitle>
+        {!firebaseAvailable ? (
+          <Text style={s.hint}>
+            尚未設定 Firebase。請依 README 步驟建立 Firebase 專案,把設定貼進 src/config.ts
+            後重新啟動,即可與另一半即時同步。
+          </Text>
+        ) : shared ? (
+          <>
+            <Text style={s.codeLabel}>配對碼</Text>
+            <Text style={s.code}>{data.settings.spaceId}</Text>
+            <Button label="分享配對碼給對方" onPress={shareCode} />
+            <Button label="離開共享空間" variant="outline" onPress={leaveSharedSpace} />
+            <Text style={s.hint}>離開後資料保留在本機,不會刪除雲端資料。</Text>
+          </>
+        ) : (
+          <>
+            <Text style={s.hint}>
+              建立共享空間後會得到一組配對碼,對方輸入後雙方即時同步行程、經期紀錄與成員設定;
+              對方修改時你也會收到通知。
+            </Text>
+            <Button label="建立共享空間" onPress={() => void onCreateSpace()} disabled={working} />
+            <Text style={[s.hint, { marginTop: spacing.md }]}>或輸入對方的配對碼:</Text>
+            <TextInput
+              style={s.tokenInput}
+              value={joinCode}
+              onChangeText={setJoinCode}
+              placeholder="例如:K7PQ2WX4MN"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="characters"
+            />
+            <Button label="加入共享空間" variant="outline" onPress={() => void onJoinSpace()} disabled={working} />
+          </>
+        )}
+      </Card>
+
+      {/* Google Calendar */}
+      <Card>
+        <SectionTitle>Google Calendar</SectionTitle>
+        <Text style={s.hint}>
+          狀態:{data.settings.googleConnected ? '✅ 已連接' : '尚未連接'}
+        </Text>
+        {!data.settings.googleConnected ? (
+          <>
+            {google.configured ? (
+              <Button
+                label={google.busy ? '連接中…' : '使用 Google 帳號登入'}
+                onPress={() => void google.signIn()}
+                disabled={!google.ready || google.busy}
+              />
+            ) : (
+              <Text style={s.hint}>
+                尚未設定 OAuth 用戶端 ID。請依 README 步驟到 Google Cloud Console 申請,
+                填入 src/config.ts 後此處會出現登入按鈕。
+              </Text>
+            )}
+            <Text style={[s.hint, { marginTop: spacing.md }]}>開發測試:手動貼 Access Token</Text>
+            <TextInput
+              style={s.tokenInput}
+              value={token}
+              onChangeText={setToken}
+              placeholder="貼上 OAuth Playground 取得的 token"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+            />
+            <Button
+              label="使用測試 Token 連接"
+              variant="outline"
+              onPress={() => {
+                if (token.trim()) setGoogleToken(token.trim());
+              }}
+            />
+          </>
+        ) : (
+          <Button label="中斷連接" variant="outline" onPress={disconnectGoogle} />
+        )}
+        <Text style={s.hint}>
+          連接後,行程開啟「同步到 Google 日曆」即自動同步;也可在 Google
+          日曆建立共用日曆並將對方加為編輯者(見 README)。
+        </Text>
       </Card>
 
       {/* 通知 */}
@@ -92,41 +213,19 @@ const SettingsScreen: React.FC = () => {
         </View>
         <Text style={s.hint}>
           啟用後:經期前 {data.settings.remindDaysBefore} 天與預測開始日會收到提醒;
-          共同日曆有變動時也會通知。
+          {shared ? '對方' : '共同日曆'}修改行程時也會通知。
         </Text>
         <Button label="發送測試通知" variant="outline" onPress={() => void sendTestNotification()} />
-      </Card>
-
-      {/* Google Calendar */}
-      <Card>
-        <SectionTitle>Google Calendar</SectionTitle>
-        <Text style={s.hint}>
-          狀態:{data.settings.googleConnected ? '✅ 已連接' : '尚未連接'}
-        </Text>
-        {!data.settings.googleConnected ? (
-          <>
-            <TextInput
-              style={s.tokenInput}
-              value={token}
-              onChangeText={setToken}
-              placeholder="貼上 Access Token(開發測試用)"
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-            />
-            <Button label="連接 Google Calendar" onPress={connectGoogle} />
-          </>
-        ) : (
-          <Button label="中斷連接" variant="outline" onPress={disconnectGoogle} />
-        )}
-        <Text style={s.hint}>
-          共同編輯:連接後可在 Google 日曆建立共用日曆,將對方帳號加為編輯者,雙方都能讀寫同一份日曆。
-        </Text>
       </Card>
 
       {/* 資料 */}
       <Card>
         <SectionTitle>資料</SectionTitle>
-        <Text style={s.hint}>資料目前儲存在本機。正式版將同步至 Firebase,跨裝置即時共享。</Text>
+        <Text style={s.hint}>
+          {shared
+            ? '資料即時同步至 Firebase,本機保留快取。'
+            : '資料目前儲存在本機。設定 Firebase 並配對後即可跨裝置共享。'}
+        </Text>
         <Button label="清除所有資料" variant="danger" onPress={confirmReset} />
       </Card>
     </ScrollView>
@@ -168,6 +267,14 @@ const s = StyleSheet.create({
     fontSize: 13,
     color: colors.text,
     marginBottom: spacing.xs,
+  },
+  codeLabel: { fontSize: 12, color: colors.textMuted },
+  code: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: colors.primary,
+    letterSpacing: 2,
+    marginVertical: spacing.xs,
   },
 });
 

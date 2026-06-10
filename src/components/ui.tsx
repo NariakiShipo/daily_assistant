@@ -12,9 +12,11 @@ export const Chip: React.FC<{
   active?: boolean;
   color?: string;
   onPress?: () => void;
-}> = ({ label, active, color = colors.primary, onPress }) => (
+  onLongPress?: () => void;
+}> = ({ label, active, color = colors.primary, onPress, onLongPress }) => (
   <TouchableOpacity
     onPress={onPress}
+    onLongPress={onLongPress}
     style={[
       s.chip,
       { borderColor: color },
