@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Daily Assistant",
+    "slug": "daily-assistant",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "platforms": ["ios", "android", "web"],
+    "splash": {
+      "backgroundColor": "#FDF2F4"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.nariaki.dailyassistant"
+    },
+    "android": {
+      "package": "com.nariaki.dailyassistant",
+      "permissions": ["RECEIVE_BOOT_COMPLETED", "SCHEDULE_EXACT_ALARM"]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#E8638C"
+        }
+      ]
+    ]
+  }
+}

@@ -1,0 +1,47 @@
+# ===== 依賴套件 =====
+node_modules/
+
+# ===== Expo / React Native =====
+.expo/
+dist/
+web-build/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+/ios/
+/android/
+
+# ===== 環境變數 & 機密設定 =====
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env*.local
+
+# ===== Firebase 機密檔案 =====
+google-services.json
+GoogleService-Info.plist
+firebase-debug.log
+firebase-debug.*.log
+.firebase/
+
+# ===== 系統檔案 =====
+.DS_Store
+Thumbs.db
+
+# ===== 編輯器 / IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== 建置產物 =====
+build/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
