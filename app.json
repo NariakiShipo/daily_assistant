@@ -7,7 +7,10 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "platforms": ["ios", "android", "web"],
+    "icon": "./assets/icon.png",
     "splash": {
+      "image": "./assets/adaptive-icon.png",
+      "resizeMode": "contain",
       "backgroundColor": "#FDF2F4"
     },
     "ios": {
@@ -16,12 +19,17 @@
     },
     "android": {
       "package": "com.nariaki.dailyassistant",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#E8638C"
+      },
       "permissions": ["RECEIVE_BOOT_COMPLETED", "SCHEDULE_EXACT_ALARM"]
     },
     "web": {
       "bundler": "metro"
     },
     "plugins": [
+      "./plugins/withoutPushEntitlement",
       [
         "expo-notifications",
         {
