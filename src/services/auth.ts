@@ -11,11 +11,14 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Auth,
+  GoogleAuthProvider,
   createUserWithEmailAndPassword,
   getAuth,
   initializeAuth,
   onAuthStateChanged,
+  signInWithCredential,
   signInWithEmailAndPassword,
+  signInWithPopup,
   signOut,
   // RN 入口才有的匯出,web 型別檔沒有宣告
   // @ts-expect-error -- getReactNativePersistence 不在 web 型別中
@@ -67,6 +70,22 @@ export async function signOutUser(): Promise<void> {
   await signOut(a);
 }
 
+/** Google 登入(網頁:彈窗) */
+export async function signInWithGooglePopup(): Promise<void> {
+  const a = getAuthInstance();
+  if (!a) throw new Error('Firebase 尚未設定');
+  const provider = new GoogleAuthProvider();
+  await signInWithPopup(a, provider);
+}
+
+/** Google 登入(手機:用 expo-auth-session 取得的 id_token 換 Firebase 憑證) */
+export async function signInWithGoogleIdToken(idToken: string): Promise<void> {
+  const a = getAuthInstance();
+  if (!a) throw new Error('Firebase 尚未設定');
+  const credential = GoogleAuthProvider.credential(idToken);
+  await signInWithCredential(a, credential);
+}
+
 /** 把 Firebase Auth 錯誤碼轉成中文訊息 */
 export function authErrorMessage(e: unknown): string {
   const code = (e as { code?: string })?.code ?? '';
@@ -86,7 +105,16 @@ export function authErrorMessage(e: unknown): string {
     case 'auth/network-request-failed':
       return '網路連線失敗,請檢查網路。';
     case 'auth/operation-not-allowed':
-      return '尚未啟用 Email/密碼登入:請到 Firebase Console → Authentication → Sign-in method 啟用。';
+      return '尚未啟用此登入方式:請到 Firebase Console → Authentication → Sign-in method 啟用(Email/密碼 或 Google)。';
+    case 'auth/popup-closed-by-user':
+    case 'auth/cancelled-popup-request':
+      return '已取消 Google 登入。';
+    case 'auth/popup-blocked':
+      return '瀏覽器封鎖了登入彈窗,請允許彈出視窗後再試。';
+    case 'auth/account-exists-with-different-credential':
+      return '這個 Email 已用其他方式註冊,請改用原本的方式登入。';
+    case 'auth/unauthorized-domain':
+      return '此網域未授權:請到 Firebase Console → Authentication → Settings → 授權網域加入此網站。';
     default:
       return `登入失敗:${String((e as Error)?.message ?? e)}`;
   }

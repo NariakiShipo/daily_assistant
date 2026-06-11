@@ -15,6 +15,7 @@ import { Button, Card, SectionTitle } from '../components/ui';
 import { sendTestNotification } from '../services/notifications';
 import { useGoogleAuth, signOutGoogle } from '../services/googleAuth';
 import { authErrorMessage, signInEmail, signOutUser, signUpEmail } from '../services/auth';
+import { useGoogleLogin } from '../services/googleLogin';
 import { confirmDialog, notify } from '../utils/dialog';
 
 const SettingsScreen: React.FC = () => {
@@ -57,6 +58,11 @@ const SettingsScreen: React.FC = () => {
   const google = useGoogleAuth((ok) => {
     setGoogleConnected(ok);
     notify(ok ? '已連接 Google' : '連接失敗', ok ? '行程可自動同步到 Google 日曆了。' : '請確認 config.ts 的用戶端 ID 與平台設定。');
+  });
+
+  const googleLogin = useGoogleLogin((ok, code) => {
+    if (ok) notify('Google 登入成功', '本機資料會自動上傳雲端並開始同步。');
+    else if (code) notify('Google 登入失敗', authErrorMessage({ code }));
   });
 
   const disconnectGoogle = () => {
@@ -187,6 +193,17 @@ const SettingsScreen: React.FC = () => {
               variant="outline"
               onPress={() => void doAuth('up')}
               disabled={authBusy}
+            />
+            <View style={s.divider}>
+              <View style={s.dividerLine} />
+              <Text style={s.dividerText}>或</Text>
+              <View style={s.dividerLine} />
+            </View>
+            <Button
+              label={googleLogin.busy ? '登入中…' : '使用 Google 登入'}
+              variant="outline"
+              onPress={() => void googleLogin.signIn()}
+              disabled={!googleLogin.ready || googleLogin.busy}
             />
           </>
         )}
@@ -343,6 +360,13 @@ const s = StyleSheet.create({
     color: colors.text,
     marginBottom: spacing.xs,
   },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: spacing.sm,
+  },
+  dividerLine: { flex: 1, height: 1, backgroundColor: colors.border },
+  dividerText: { fontSize: 12, color: colors.textMuted, marginHorizontal: spacing.sm },
   codeLabel: { fontSize: 12, color: colors.textMuted },
   code: {
     fontSize: 24,
