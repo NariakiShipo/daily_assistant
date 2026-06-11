@@ -17,7 +17,7 @@ import { signInWithGoogleIdToken, signInWithGooglePopup } from './auth';
 
 WebBrowser.maybeCompleteAuthSession();
 
-export function useGoogleLogin(onResult: (ok: boolean, errorCode?: string) => void) {
+export function useGoogleLogin(onResult: (ok: boolean, error?: unknown) => void) {
   const isWeb = Platform.OS === 'web';
   const [busy, setBusy] = useState(false);
 
@@ -39,7 +39,7 @@ export function useGoogleLogin(onResult: (ok: boolean, errorCode?: string) => vo
             await signInWithGoogleIdToken(idToken);
             onResult(true);
           } catch (e) {
-            onResult(false, (e as { code?: string })?.code);
+            onResult(false, e);
           } finally {
             setBusy(false);
           }
@@ -47,7 +47,7 @@ export function useGoogleLogin(onResult: (ok: boolean, errorCode?: string) => vo
           onResult(false);
         }
       } else if (response.type === 'error') {
-        onResult(false);
+        onResult(false, response.error);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -60,7 +60,7 @@ export function useGoogleLogin(onResult: (ok: boolean, errorCode?: string) => vo
         await signInWithGooglePopup();
         onResult(true);
       } catch (e) {
-        onResult(false, (e as { code?: string })?.code);
+        onResult(false, e);
       } finally {
         setBusy(false);
       }

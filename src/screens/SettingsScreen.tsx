@@ -60,9 +60,9 @@ const SettingsScreen: React.FC = () => {
     notify(ok ? '已連接 Google' : '連接失敗', ok ? '行程可自動同步到 Google 日曆了。' : '請確認 config.ts 的用戶端 ID 與平台設定。');
   });
 
-  const googleLogin = useGoogleLogin((ok, code) => {
+  const googleLogin = useGoogleLogin((ok, error) => {
     if (ok) notify('Google 登入成功', '本機資料會自動上傳雲端並開始同步。');
-    else if (code) notify('Google 登入失敗', authErrorMessage({ code }));
+    else notify('Google 登入失敗', authErrorMessage(error));
   });
 
   const disconnectGoogle = () => {

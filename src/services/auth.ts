@@ -115,7 +115,14 @@ export function authErrorMessage(e: unknown): string {
       return '這個 Email 已用其他方式註冊,請改用原本的方式登入。';
     case 'auth/unauthorized-domain':
       return '此網域未授權:請到 Firebase Console → Authentication → Settings → 授權網域加入此網站。';
-    default:
-      return `登入失敗:${String((e as Error)?.message ?? e)}`;
+    case 'auth/configuration-not-found':
+    case 'auth/internal-error':
+      return 'Google 登入尚未設定完成:請到 Firebase Console → Authentication → Sign-in method 啟用 Google 供應商。';
+    default: {
+      const msg = (e as { message?: string })?.message;
+      if (code) return `登入失敗(${code})`;
+      if (msg) return `登入失敗:${msg}`;
+      return '登入失敗,請稍後再試。';
+    }
   }
 }
