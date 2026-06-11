@@ -17,6 +17,16 @@ const TimetableScreen: React.FC = () => {
   const [editing, setEditing] = useState<CourseEntry | null>(null);
   const [draft, setDraft] = useState({ weekday: 1, startPeriod: 0 });
 
+  /** 同名課程顏色統一:每個課名取第一個有設定的顏色 */
+  const colorByTitle = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const c of data.courses) {
+      if (c.ownerId !== owner || !c.color) continue;
+      if (!m[c.title]) m[c.title] = c.color;
+    }
+    return m;
+  }, [data.courses, owner]);
+
   /** cellMap[weekday][periodIndex] = 該格的課(只看目前選取成員) */
   const cellMap = useMemo(() => {
     const map: (CourseEntry | null)[][] = Array.from({ length: 6 }, () =>
@@ -111,7 +121,10 @@ const TimetableScreen: React.FC = () => {
                       key={weekday}
                       style={[
                         s.cell,
-                        { backgroundColor: course.color ?? colors.primary },
+                        {
+                          backgroundColor:
+                            colorByTitle[course.title] ?? course.color ?? colors.primary,
+                        },
                         isFirst && s.blockTop,
                         isLast && s.blockBottom,
                       ]}
@@ -119,10 +132,15 @@ const TimetableScreen: React.FC = () => {
                     >
                       {isFirst && (
                         <View style={s.blockTextWrap}>
-                          <Text style={s.courseTitle} numberOfLines={span * 2}>
+                          <Text
+                            style={s.courseTitle}
+                            numberOfLines={
+                              course.location ? Math.max(1, span * 2 - 1) : span * 2
+                            }
+                          >
                             {course.title}
                           </Text>
-                          {!!course.location && span > 1 && (
+                          {!!course.location && (
                             <Text style={s.courseLoc} numberOfLines={1}>
                               {course.location}
                             </Text>
