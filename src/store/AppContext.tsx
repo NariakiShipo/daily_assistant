@@ -13,6 +13,7 @@ import { predictNextCycle, getCurrentPhase, PhaseInfo } from '../services/period
 import * as notif from '../services/notifications';
 import * as gcal from '../services/googleCalendar';
 import * as fb from '../services/firebaseSync';
+import * as auth from '../services/auth';
 import { isFirebaseConfigured } from '../config';
 
 interface AppContextValue {
@@ -23,6 +24,8 @@ interface AppContextValue {
   /** 是否處於跨裝置共享模式 */
   shared: boolean;
   firebaseAvailable: boolean;
+  /** 已登入的帳號(null = 未登入) */
+  authUser: auth.AuthUser | null;
   // events
   addEvent: (ev: CalendarEvent) => Promise<void>;
   updateEvent: (ev: CalendarEvent) => Promise<void>;
@@ -61,7 +64,12 @@ export const useApp = (): AppContextValue => {
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [data, setData] = useState<AppData>(defaultData);
   const [ready, setReady] = useState(false);
+  const [authUser, setAuthUser] = useState<auth.AuthUser | null>(null);
   const loaded = useRef(false);
+  const dataRef = useRef(data);
+  useEffect(() => {
+    dataRef.current = data;
+  });
 
   const spaceId = data.settings.spaceId ?? null;
   const firebaseAvailable = isFirebaseConfigured();
@@ -104,6 +112,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shared, spaceId]);
+
+  // 訂閱登入狀態
+  useEffect(() => {
+    if (!firebaseAvailable) return;
+    return auth.onAuthChanged(setAuthUser);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firebaseAvailable]);
+
+  // 登入後:解析帳號綁定的共享空間,並把本機資料合併上傳雲端
+  useEffect(() => {
+    if (!authUser || !ready || !firebaseAvailable) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const cur = dataRef.current;
+        let sid = await fb.getUserSpaceId(authUser.uid);
+        if (!sid) {
+          // 帳號還沒有空間:沿用目前配對的空間,否則建立新空間(會上傳本機資料)
+          sid = cur.settings.spaceId ?? null;
+          if (!sid) {
+            sid = await fb.createSpace(cur.users, cur.events, cur.periods, cur.courses);
+          }
+          await fb.bindUserSpace(authUser.uid, sid);
+        }
+        // 把本機資料合併上傳(id 不變,重複者覆蓋,不會弄丟雲端既有資料)
+        await fb.uploadLocal(sid, cur.events, cur.periods, cur.courses);
+        if (!cancelled) {
+          setData((d) =>
+            d.settings.spaceId === sid
+              ? d
+              : { ...d, settings: { ...d.settings, spaceId: sid } }
+          );
+        }
+      } catch {
+        // 同步失敗不擋本機使用,下次登入或操作時會再同步
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser, ready, firebaseAvailable]);
 
   const prediction = useMemo(() => predictNextCycle(data.periods), [data.periods]);
   const phase = useMemo(
@@ -296,9 +345,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const createSharedSpace = useCallback(async (): Promise<string> => {
     const code = await fb.createSpace(data.users, data.events, data.periods, data.courses);
+    if (authUser) void fb.bindUserSpace(authUser.uid, code);
     setData((d) => ({ ...d, settings: { ...d.settings, spaceId: code } }));
     return code;
-  }, [data.users, data.events, data.periods, data.courses]);
+  }, [data.users, data.events, data.periods, data.courses, authUser]);
 
   const joinSharedSpace = useCallback(
     async (code: string): Promise<boolean> => {
@@ -307,10 +357,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!exists) return false;
       // 把本機既有資料合併上去(id 唯一,不會重複)
       await fb.uploadLocal(normalized, data.events, data.periods, data.courses);
+      if (authUser) void fb.bindUserSpace(authUser.uid, normalized);
       setData((d) => ({ ...d, settings: { ...d.settings, spaceId: normalized } }));
       return true;
     },
-    [data.events, data.periods, data.courses]
+    [data.events, data.periods, data.courses, authUser]
   );
 
   const leaveSharedSpace = useCallback(() => {
@@ -331,6 +382,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     phase,
     shared,
     firebaseAvailable,
+    authUser,
     addEvent,
     updateEvent,
     deleteEvent,

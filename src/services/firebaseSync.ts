@@ -31,6 +31,13 @@ import { CalendarEvent, CourseEntry, PeriodRecord, UserProfile } from '../types'
 let app: FirebaseApp | null = null;
 let db: Firestore | null = null;
 
+/** 供 auth 等其他服務取得同一個 Firebase App 實例 */
+export function getFirebaseApp(): FirebaseApp | null {
+  if (!isFirebaseConfigured()) return null;
+  if (!app) getDb();
+  return app;
+}
+
 function getDb(): Firestore | null {
   if (!isFirebaseConfigured()) return null;
   if (!db) {
@@ -43,6 +50,20 @@ function getDb(): Firestore | null {
     });
   }
   return db;
+}
+
+/** 帳號綁定的共享空間:users/{uid} → { spaceId } */
+export async function getUserSpaceId(uid: string): Promise<string | null> {
+  const d = getDb();
+  if (!d) return null;
+  const snap = await getDoc(doc(d, 'users', uid));
+  return (snap.data()?.spaceId as string | undefined) ?? null;
+}
+
+export async function bindUserSpace(uid: string, spaceId: string): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'users', uid), { spaceId, updatedAt: serverTimestamp() }, { merge: true });
 }
 
 /** 產生 10 碼配對碼(去除易混淆字元) */

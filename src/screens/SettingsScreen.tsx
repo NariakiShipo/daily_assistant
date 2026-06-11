@@ -14,6 +14,7 @@ import { colors, radius, spacing, userColorChoices } from '../theme';
 import { Button, Card, SectionTitle } from '../components/ui';
 import { sendTestNotification } from '../services/notifications';
 import { useGoogleAuth, signOutGoogle } from '../services/googleAuth';
+import { authErrorMessage, signInEmail, signOutUser, signUpEmail } from '../services/auth';
 import { confirmDialog, notify } from '../utils/dialog';
 
 const SettingsScreen: React.FC = () => {
@@ -21,6 +22,7 @@ const SettingsScreen: React.FC = () => {
     data,
     shared,
     firebaseAvailable,
+    authUser,
     updateUser,
     setNotificationsEnabled,
     setGoogleToken,
@@ -33,6 +35,24 @@ const SettingsScreen: React.FC = () => {
   const [token, setToken] = useState('');
   const [joinCode, setJoinCode] = useState('');
   const [working, setWorking] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+
+  const doAuth = async (mode: 'in' | 'up') => {
+    if (!email.trim() || !password) return notify('請輸入 Email 與密碼');
+    setAuthBusy(true);
+    try {
+      if (mode === 'in') await signInEmail(email, password);
+      else await signUpEmail(email, password);
+      setPassword('');
+      notify(mode === 'in' ? '登入成功' : '註冊成功', '本機資料會自動上傳雲端並開始同步。');
+    } catch (e) {
+      notify(mode === 'in' ? '登入失敗' : '註冊失敗', authErrorMessage(e));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
 
   const google = useGoogleAuth((ok) => {
     setGoogleConnected(ok);
@@ -115,6 +135,61 @@ const SettingsScreen: React.FC = () => {
             {u.isPrimary && <Text style={s.primaryTag}>經期紀錄對象</Text>}
           </View>
         ))}
+      </Card>
+
+      {/* 帳號(雲端同步) */}
+      <Card>
+        <SectionTitle>帳號(雲端同步)</SectionTitle>
+        {!firebaseAvailable ? (
+          <Text style={s.hint}>尚未設定 Firebase,無法使用帳號功能。</Text>
+        ) : authUser ? (
+          <>
+            <Text style={s.hint}>已登入:{authUser.email}</Text>
+            <Text style={s.hint}>
+              本機的行程、經期與課表已上傳雲端;在其他裝置登入同一帳號即自動同步。
+            </Text>
+            <Button
+              label="登出"
+              variant="outline"
+              onPress={() => {
+                void signOutUser();
+                notify('已登出', '資料保留在本機,仍會以下方配對碼模式繼續同步。');
+              }}
+            />
+          </>
+        ) : (
+          <>
+            <Text style={s.hint}>
+              登入後,本機記錄會自動上傳雲端;換裝置或重灌只要登入同一帳號,資料就會回來。
+              (也可以繼續用下方的配對碼與伴侶共享,登入會自動綁定同一個空間)
+            </Text>
+            <TextInput
+              style={s.tokenInput}
+              value={email}
+              onChangeText={setEmail}
+              placeholder="Email"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
+            <TextInput
+              style={[s.tokenInput, { marginTop: spacing.sm }]}
+              value={password}
+              onChangeText={setPassword}
+              placeholder="密碼(至少 6 碼)"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              secureTextEntry
+            />
+            <Button label={authBusy ? '處理中…' : '登入'} onPress={() => void doAuth('in')} disabled={authBusy} />
+            <Button
+              label="註冊新帳號"
+              variant="outline"
+              onPress={() => void doAuth('up')}
+              disabled={authBusy}
+            />
+          </>
+        )}
       </Card>
 
       {/* 跨裝置共享 */}
