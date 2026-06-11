@@ -45,7 +45,7 @@ const toGoogleEvent = (ev: CalendarEvent) => ({
   summary: ev.title,
   description: ev.notes ?? '',
   start: { dateTime: `${ev.date}T${ev.startTime}:00`, timeZone: 'Asia/Taipei' },
-  end: { dateTime: `${ev.date}T${ev.endTime}:00`, timeZone: 'Asia/Taipei' },
+  end: { dateTime: `${ev.endDate ?? ev.date}T${ev.endTime}:00`, timeZone: 'Asia/Taipei' },
 });
 
 /** 推送事件至 Google Calendar,回傳 googleEventId(無 token 時回傳 null) */

@@ -12,8 +12,10 @@ export interface CalendarEvent {
   id: string;
   title: string;
   notes?: string;
-  /** YYYY-MM-DD */
+  /** YYYY-MM-DD 開始日期 */
   date: string;
+  /** YYYY-MM-DD 結束日期(跨日行程用;單日行程不設) */
+  endDate?: string;
   /** HH:mm */
   startTime: string;
   /** HH:mm */

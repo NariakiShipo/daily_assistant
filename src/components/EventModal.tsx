@@ -13,10 +13,11 @@ import {
 } from 'react-native';
 import { CalendarEvent, EVENT_TAGS } from '../types';
 import { colors, radius, spacing, tagColor } from '../theme';
-import { isValidDateKey, isValidTime, uid } from '../utils/date';
+import { formatDateZh, isValidTime, isWithin, uid } from '../utils/date';
 import { confirmDialog, notify } from '../utils/dialog';
 import { useApp } from '../store/AppContext';
 import { Button, Chip } from './ui';
+import MiniCalendar from './MiniCalendar';
 
 interface Props {
   visible: boolean;
@@ -32,6 +33,8 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
 
   const [title, setTitle] = useState('');
   const [date, setDate] = useState(defaultDate);
+  const [endDate, setEndDate] = useState(''); // 空字串 = 單日行程
+  const [dateMode, setDateMode] = useState<'start' | 'end'>('start');
   const [startTime, setStartTime] = useState('09:00');
   const [endTime, setEndTime] = useState('10:00');
   const [ownerId, setOwnerId] = useState(data.users[0]?.id ?? 'u1');
@@ -77,9 +80,11 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
 
   useEffect(() => {
     if (!visible) return;
+    setDateMode('start');
     if (event) {
       setTitle(event.title);
       setDate(event.date);
+      setEndDate(event.endDate ?? '');
       setStartTime(event.startTime);
       setEndTime(event.endTime);
       setOwnerId(event.ownerId);
@@ -89,6 +94,7 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
     } else {
       setTitle('');
       setDate(defaultDate);
+      setEndDate('');
       setStartTime('09:00');
       setEndTime('10:00');
       setOwnerId(data.users[0]?.id ?? 'u1');
@@ -99,17 +105,34 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
     }
   }, [visible, event, defaultDate, data.users]);
 
+  const isMultiDay = !!endDate && endDate !== date;
+
+  const pickDate = (key: string) => {
+    if (dateMode === 'start') {
+      if (endDate && key > endDate) {
+        return notify('開始日期不能晚於結束日期', `目前結束日為 ${formatDateZh(endDate)}。`);
+      }
+      setDate(key);
+    } else {
+      if (key < date) {
+        return notify('結束日期不能早於開始日期', `目前開始日為 ${formatDateZh(date)}。`);
+      }
+      setEndDate(key);
+    }
+  };
+
   const save = async () => {
     if (!title.trim()) return notify('請輸入標題');
-    if (!isValidDateKey(date)) return notify('日期格式錯誤', '請用 YYYY-MM-DD');
     if (!isValidTime(startTime) || !isValidTime(endTime))
       return notify('時間格式錯誤', '請用 HH:MM(24 小時制)');
-    if (endTime <= startTime) return notify('結束時間需晚於開始時間');
+    // 跨日行程允許結束時刻早於開始時刻(因為在不同天)
+    if (!isMultiDay && endTime <= startTime) return notify('結束時間需晚於開始時間');
 
     const ev: CalendarEvent = {
       id: event?.id ?? uid(),
       title: title.trim(),
       date,
+      endDate: isMultiDay ? endDate : undefined,
       startTime,
       endTime,
       ownerId,
@@ -159,8 +182,31 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
               placeholderTextColor={colors.textMuted}
             />
 
-            <Text style={s.label}>日期(YYYY-MM-DD)</Text>
-            <TextInput style={s.input} value={date} onChangeText={setDate} />
+            <Text style={s.label}>日期(點日曆選擇;長行程可設定結束日期)</Text>
+            <View style={s.chips}>
+              <Chip
+                label={`開始:${formatDateZh(date)}`}
+                active={dateMode === 'start'}
+                onPress={() => setDateMode('start')}
+              />
+              <Chip
+                label={`結束:${endDate ? formatDateZh(endDate) : '單日'}`}
+                active={dateMode === 'end'}
+                onPress={() => setDateMode('end')}
+              />
+              {isMultiDay && (
+                <Chip label="改回單日" color={colors.textMuted} onPress={() => setEndDate('')} />
+              )}
+            </View>
+            <MiniCalendar
+              selected={dateMode === 'start' ? date : endDate || null}
+              onSelect={pickDate}
+              getMark={(key) => {
+                if (key === date) return { bg: colors.primarySoft, border: colors.primary };
+                if (endDate && isWithin(key, date, endDate)) return { bg: colors.primarySoft };
+                return undefined;
+              }}
+            />
 
             <View style={s.row}>
               <View style={s.half}>

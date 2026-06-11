@@ -10,6 +10,7 @@ import { useApp } from '../store/AppContext';
 import { CalendarEvent, EVENT_TAGS, TAG_DONE } from '../types';
 import { colors, radius, spacing, tagColor } from '../theme';
 import {
+  formatDateZh,
   formatMonthZh,
   isWithin,
   monthGrid,
@@ -45,10 +46,13 @@ const CalendarScreen: React.FC = () => {
   const today = todayKey();
 
   const monthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`;
+  const monthStart = `${monthPrefix}-01`;
+  const monthEnd = `${monthPrefix}-31`;
   const monthEvents = useMemo(
     () =>
       data.events
-        .filter((e) => e.date.startsWith(monthPrefix))
+        // 跨日行程只要與本月有重疊就顯示
+        .filter((e) => e.date <= monthEnd && (e.endDate ?? e.date) >= monthStart)
         .filter((e) => (filterUser ? e.ownerId === filterUser : true))
         .filter((e) => {
           if (!filterTag) return true;
@@ -56,12 +60,22 @@ const CalendarScreen: React.FC = () => {
           return !!e.tags?.includes(filterTag);
         })
         .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime)),
-    [data.events, monthPrefix, filterUser, filterTag]
+    [data.events, monthStart, monthEnd, filterUser, filterTag]
   );
 
+  /** 跨日行程展開到範圍內每一天(上限 62 天防呆) */
   const eventsByDate = useMemo(() => {
     const map: Record<string, CalendarEvent[]> = {};
-    for (const e of monthEvents) (map[e.date] ??= []).push(e);
+    for (const e of monthEvents) {
+      const last = e.endDate ?? e.date;
+      let d = e.date;
+      let guard = 0;
+      while (d <= last && guard < 62) {
+        (map[d] ??= []).push(e);
+        d = addDays(d, 1);
+        guard++;
+      }
+    }
     return map;
   }, [monthEvents]);
 
@@ -306,7 +320,9 @@ const EventRow: React.FC<{
               ))}
             </View>
             <Text style={s.eventMeta}>
-              {showDate ? `${ev.date}  ` : ''}
+              {(showDate || ev.endDate)
+                ? `${formatDateZh(ev.date)}${ev.endDate ? ` → ${formatDateZh(ev.endDate)}` : ''}  `
+                : ''}
               {ev.startTime} – {ev.endTime}
               {ownerName ? `  ·  ${ownerName}` : ''}
               {ev.googleEventId ? '  ·  已同步 G 日曆' : ev.syncToGoogle ? '  ·  待同步' : ''}
