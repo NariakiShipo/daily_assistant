@@ -70,12 +70,22 @@ export async function signOutUser(): Promise<void> {
   await signOut(a);
 }
 
-/** Google 登入(網頁:彈窗) */
-export async function signInWithGooglePopup(): Promise<void> {
+/** 一併要求 Google 日曆權限,讓登入時同時連接日曆 */
+const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar';
+
+/** Google 登入(網頁:彈窗);回傳順便取得的日曆 access token(可能為 null) */
+export async function signInWithGooglePopup(): Promise<{
+  calendarToken: string | null;
+  expiresIn: number;
+}> {
   const a = getAuthInstance();
   if (!a) throw new Error('Firebase 尚未設定');
   const provider = new GoogleAuthProvider();
-  await signInWithPopup(a, provider);
+  provider.addScope(CALENDAR_SCOPE);
+  const result = await signInWithPopup(a, provider);
+  const cred = GoogleAuthProvider.credentialFromResult(result);
+  // Google 的 OAuth access token 預設有效期約 1 小時
+  return { calendarToken: cred?.accessToken ?? null, expiresIn: 3600 };
 }
 
 /** Google 登入(手機:用 expo-auth-session 取得的 id_token 換 Firebase 憑證) */

@@ -61,6 +61,14 @@ async function loadTokens(): Promise<StoredTokens | null> {
   }
 }
 
+/**
+ * 存入由其他流程(如 Firebase Google 登入)取得的日曆 access token。
+ * 這類 token 沒有 refresh token,過期(約 1 小時)後需重新登入。
+ */
+export async function storeCalendarToken(accessToken: string, expiresIn?: number): Promise<void> {
+  await saveTokens(accessToken, expiresIn);
+}
+
 /** 取得有效 access token;快過期且有 refresh token 時自動刷新 */
 export async function getValidAccessToken(): Promise<string | null> {
   const t = await loadTokens();

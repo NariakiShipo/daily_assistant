@@ -14,18 +14,25 @@ import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { googleOAuth, isGoogleConfigured } from '../config';
 import { signInWithGoogleIdToken, signInWithGooglePopup } from './auth';
+import { storeCalendarToken } from './googleAuth';
 
 WebBrowser.maybeCompleteAuthSession();
 
-export function useGoogleLogin(onResult: (ok: boolean, error?: unknown) => void) {
+const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar';
+
+/** ok:登入是否成功;calendarConnected:是否同時連上 Google 日曆 */
+export function useGoogleLogin(
+  onResult: (ok: boolean, error?: unknown, calendarConnected?: boolean) => void
+) {
   const isWeb = Platform.OS === 'web';
   const [busy, setBusy] = useState(false);
 
-  // 原生:取得 Google id_token
+  // 原生:取得 Google id_token,並一併要求日曆權限
   const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
     clientId: googleOAuth.webClientId || undefined,
     iosClientId: googleOAuth.iosClientId || undefined,
     androidClientId: googleOAuth.androidClientId || undefined,
+    scopes: ['openid', 'profile', 'email', CALENDAR_SCOPE],
   });
 
   useEffect(() => {
@@ -37,7 +44,14 @@ export function useGoogleLogin(onResult: (ok: boolean, error?: unknown) => void)
           setBusy(true);
           try {
             await signInWithGoogleIdToken(idToken);
-            onResult(true);
+            // 若授權流程同時回傳 access token,順便連接日曆
+            const accessToken = response.authentication?.accessToken;
+            let calConnected = false;
+            if (accessToken) {
+              await storeCalendarToken(accessToken, response.authentication?.expiresIn);
+              calConnected = true;
+            }
+            onResult(true, undefined, calConnected);
           } catch (e) {
             onResult(false, e);
           } finally {
@@ -57,8 +71,13 @@ export function useGoogleLogin(onResult: (ok: boolean, error?: unknown) => void)
     if (isWeb) {
       setBusy(true);
       try {
-        await signInWithGooglePopup();
-        onResult(true);
+        const { calendarToken, expiresIn } = await signInWithGooglePopup();
+        let calConnected = false;
+        if (calendarToken) {
+          await storeCalendarToken(calendarToken, expiresIn);
+          calConnected = true;
+        }
+        onResult(true, undefined, calConnected);
       } catch (e) {
         onResult(false, e);
       } finally {
