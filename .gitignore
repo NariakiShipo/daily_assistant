@@ -52,3 +52,8 @@ yarn-error.log*
 # Expo prebuild 產物(CNG:改 app.json 後重新 prebuild)
 /ios/
 /android/
+
+# 打包產物
+*.apk
+*.aab
+*.ipa

@@ -7,7 +7,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { AppData, CalendarEvent, PeriodRecord, UserProfile, CyclePrediction } from '../types';
+import { AppData, CalendarEvent, CourseEntry, PeriodRecord, UserProfile, CyclePrediction } from '../types';
 import { defaultData, loadData, saveData, clearData } from '../services/storage';
 import { predictNextCycle, getCurrentPhase, PhaseInfo } from '../services/periodPrediction';
 import * as notif from '../services/notifications';
@@ -31,6 +31,10 @@ interface AppContextValue {
   addPeriod: (p: PeriodRecord) => void;
   updatePeriod: (p: PeriodRecord) => void;
   deletePeriod: (id: string) => void;
+  // courses
+  addCourse: (c: CourseEntry) => void;
+  updateCourse: (c: CourseEntry) => void;
+  deleteCourse: (id: string) => void;
   // tags
   addCustomTag: (name: string) => void;
   removeCustomTag: (name: string) => void;
@@ -95,6 +99,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       },
       onPeriods: (periods) => setData((d) => ({ ...d, periods })),
+      onCourses: (courses) => setData((d) => ({ ...d, courses })),
     });
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -208,6 +213,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [shared, spaceId]
   );
 
+  const addCourse = useCallback(
+    (c: CourseEntry) => {
+      setData((d) => ({ ...d, courses: [...d.courses, c] }));
+      if (shared && spaceId) void fb.saveCourseDoc(spaceId, c);
+    },
+    [shared, spaceId]
+  );
+
+  const updateCourse = useCallback(
+    (c: CourseEntry) => {
+      setData((d) => ({ ...d, courses: d.courses.map((x) => (x.id === c.id ? c : x)) }));
+      if (shared && spaceId) void fb.saveCourseDoc(spaceId, c);
+    },
+    [shared, spaceId]
+  );
+
+  const deleteCourse = useCallback(
+    (id: string) => {
+      setData((d) => ({ ...d, courses: d.courses.filter((x) => x.id !== id) }));
+      if (shared && spaceId) void fb.deleteCourseDoc(spaceId, id);
+    },
+    [shared, spaceId]
+  );
+
   const addCustomTag = useCallback((name: string) => {
     setData((d) => {
       const cur = d.settings.customTags ?? [];
@@ -266,10 +295,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const createSharedSpace = useCallback(async (): Promise<string> => {
-    const code = await fb.createSpace(data.users, data.events, data.periods);
+    const code = await fb.createSpace(data.users, data.events, data.periods, data.courses);
     setData((d) => ({ ...d, settings: { ...d.settings, spaceId: code } }));
     return code;
-  }, [data.users, data.events, data.periods]);
+  }, [data.users, data.events, data.periods, data.courses]);
 
   const joinSharedSpace = useCallback(
     async (code: string): Promise<boolean> => {
@@ -277,11 +306,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const exists = await fb.spaceExists(normalized);
       if (!exists) return false;
       // 把本機既有資料合併上去(id 唯一,不會重複)
-      await fb.uploadLocal(normalized, data.events, data.periods);
+      await fb.uploadLocal(normalized, data.events, data.periods, data.courses);
       setData((d) => ({ ...d, settings: { ...d.settings, spaceId: normalized } }));
       return true;
     },
-    [data.events, data.periods]
+    [data.events, data.periods, data.courses]
   );
 
   const leaveSharedSpace = useCallback(() => {
@@ -308,6 +337,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addPeriod,
     updatePeriod,
     deletePeriod,
+    addCourse,
+    updateCourse,
+    deleteCourse,
     addCustomTag,
     removeCustomTag,
     updateUser,

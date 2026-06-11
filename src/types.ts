@@ -36,6 +36,22 @@ export const EVENT_TAGS = ['重要', '完成', '工作', '家庭'] as const;
 /** 完成標籤(用於完成狀態切換與「未完成」篩選) */
 export const TAG_DONE = '完成';
 
+/** 課表的一門課(每位成員一份課表,跨節次連續顯示) */
+export interface CourseEntry {
+  id: string;
+  title: string;
+  location?: string;
+  /** 1 = 週一 ⋯ 5 = 週五 */
+  weekday: number;
+  /** 起始節次(PERIOD_SLOTS 索引) */
+  startPeriod: number;
+  /** 結束節次(PERIOD_SLOTS 索引,>= startPeriod) */
+  endPeriod: number;
+  color?: string;
+  /** 這是誰的課表 */
+  ownerId: string;
+}
+
 export type FlowLevel = 'light' | 'medium' | 'heavy';
 
 /** 一次經期紀錄 */
@@ -85,5 +101,6 @@ export interface AppData {
   users: UserProfile[];
   events: CalendarEvent[];
   periods: PeriodRecord[];
+  courses: CourseEntry[];
   settings: AppSettings;
 }

@@ -26,7 +26,7 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured } from '../config';
-import { CalendarEvent, PeriodRecord, UserProfile } from '../types';
+import { CalendarEvent, CourseEntry, PeriodRecord, UserProfile } from '../types';
 
 let app: FirebaseApp | null = null;
 let db: Firestore | null = null;
@@ -59,13 +59,14 @@ export function newSpaceCode(): string {
 export async function createSpace(
   users: UserProfile[],
   events: CalendarEvent[],
-  periods: PeriodRecord[]
+  periods: PeriodRecord[],
+  courses: CourseEntry[]
 ): Promise<string> {
   const d = getDb();
   if (!d) throw new Error('Firebase 尚未設定');
   const code = newSpaceCode();
   await setDoc(doc(d, 'spaces', code), { users, createdAt: serverTimestamp() });
-  await uploadLocal(code, events, periods);
+  await uploadLocal(code, events, periods, courses);
   return code;
 }
 
@@ -81,13 +82,15 @@ export async function spaceExists(code: string): Promise<boolean> {
 export async function uploadLocal(
   code: string,
   events: CalendarEvent[],
-  periods: PeriodRecord[]
+  periods: PeriodRecord[],
+  courses: CourseEntry[]
 ): Promise<void> {
   const d = getDb();
   if (!d) return;
   const batch = writeBatch(d);
   for (const ev of events) batch.set(doc(d, 'spaces', code, 'events', ev.id), ev);
   for (const p of periods) batch.set(doc(d, 'spaces', code, 'periods', p.id), p);
+  for (const c of courses) batch.set(doc(d, 'spaces', code, 'courses', c.id), c);
   await batch.commit();
 }
 
@@ -101,6 +104,7 @@ export interface SpaceCallbacks {
   /** remoteChanges 只包含「對方裝置」造成的變更(初始載入不算) */
   onEvents: (events: CalendarEvent[], remoteChanges: RemoteEventChange[]) => void;
   onPeriods: (periods: PeriodRecord[]) => void;
+  onCourses: (courses: CourseEntry[]) => void;
 }
 
 /** 訂閱共享空間,回傳取消訂閱函式 */
@@ -131,10 +135,15 @@ export function subscribeSpace(code: string, cb: SpaceCallbacks): () => void {
     cb.onPeriods(snap.docs.map((x) => x.data() as PeriodRecord));
   });
 
+  const unsubCourses = onSnapshot(collection(d, 'spaces', code, 'courses'), (snap) => {
+    cb.onCourses(snap.docs.map((x) => x.data() as CourseEntry));
+  });
+
   return () => {
     unsubSpace();
     unsubEvents();
     unsubPeriods();
+    unsubCourses();
   };
 }
 
@@ -148,6 +157,18 @@ export async function deleteEventDoc(code: string, id: string): Promise<void> {
   const d = getDb();
   if (!d) return;
   await deleteDoc(doc(d, 'spaces', code, 'events', id));
+}
+
+export async function saveCourseDoc(code: string, c: CourseEntry): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code, 'courses', c.id), c);
+}
+
+export async function deleteCourseDoc(code: string, id: string): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await deleteDoc(doc(d, 'spaces', code, 'courses', id));
 }
 
 export async function savePeriodDoc(code: string, p: PeriodRecord): Promise<void> {
