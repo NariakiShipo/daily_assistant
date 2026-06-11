@@ -20,8 +20,10 @@ export interface CalendarEvent {
   startTime: string;
   /** HH:mm */
   endTime: string;
-  /** 此事件屬於誰 */
+  /** 此事件屬於誰(向後相容:等於 ownerIds 的第一位) */
   ownerId: string;
+  /** 此事件屬於哪些人(可複選;未設時視同 [ownerId]) */
+  ownerIds?: string[];
   /** 由誰建立(共同編輯時可能不同) */
   createdBy: string;
   /** 已同步至 Google Calendar 的事件 ID */

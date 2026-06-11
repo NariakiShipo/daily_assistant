@@ -23,6 +23,10 @@ import EventModal from '../components/EventModal';
 
 type ViewMode = 'time' | 'person';
 
+/** 行程的所有擁有者(相容舊資料的單一 ownerId) */
+const ownersOf = (e: CalendarEvent): string[] =>
+  e.ownerIds?.length ? e.ownerIds : [e.ownerId];
+
 const CalendarScreen: React.FC = () => {
   const { data, prediction, updateEvent } = useApp();
   const now = new Date();
@@ -53,7 +57,7 @@ const CalendarScreen: React.FC = () => {
       data.events
         // 跨日行程只要與本月有重疊就顯示
         .filter((e) => e.date <= monthEnd && (e.endDate ?? e.date) >= monthStart)
-        .filter((e) => (filterUser ? e.ownerId === filterUser : true))
+        .filter((e) => (filterUser ? ownersOf(e).includes(filterUser) : true))
         .filter((e) => {
           if (!filterTag) return true;
           if (filterTag === '未完成') return !e.tags?.includes(TAG_DONE);
@@ -208,9 +212,17 @@ const CalendarScreen: React.FC = () => {
                 >
                   <Text style={[s.cellDay, isToday && s.todayText]}>{dayNum}</Text>
                   <View style={s.dots}>
-                    {evs.slice(0, 3).map((e) => (
-                      <Dot key={e.id} color={userOf(e.ownerId)?.color ?? colors.primary} />
-                    ))}
+                    {evs
+                      .flatMap((e) =>
+                        ownersOf(e).map((oid) => ({
+                          key: `${e.id}-${oid}`,
+                          color: userOf(oid)?.color ?? colors.primary,
+                        }))
+                      )
+                      .slice(0, 3)
+                      .map((dot) => (
+                        <Dot key={dot.key} color={dot.color} />
+                      ))}
                   </View>
                 </TouchableOpacity>
               );
@@ -243,8 +255,10 @@ const CalendarScreen: React.FC = () => {
               <EventRow
                 key={e.id}
                 ev={e}
-                color={userOf(e.ownerId)?.color}
-                ownerName={userOf(e.ownerId)?.name}
+                color={userOf(ownersOf(e)[0])?.color}
+                ownerName={ownersOf(e)
+                  .map((id) => userOf(id)?.name ?? '?')
+                  .join('、')}
                 onPress={() => openEdit(e)}
                 onToggleDone={() => toggleDone(e)}
               />
@@ -256,7 +270,7 @@ const CalendarScreen: React.FC = () => {
             {data.users
               .filter((u) => (filterUser ? u.id === filterUser : true))
               .map((u) => {
-                const evs = monthEvents.filter((e) => e.ownerId === u.id);
+                const evs = monthEvents.filter((e) => ownersOf(e).includes(u.id));
                 return (
                   <View key={u.id} style={{ marginBottom: spacing.md }}>
                     <SectionTitle>

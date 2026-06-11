@@ -37,7 +37,7 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
   const [dateMode, setDateMode] = useState<'start' | 'end'>('start');
   const [startTime, setStartTime] = useState('09:00');
   const [endTime, setEndTime] = useState('10:00');
-  const [ownerId, setOwnerId] = useState(data.users[0]?.id ?? 'u1');
+  const [ownerIds, setOwnerIds] = useState<string[]>([data.users[0]?.id ?? 'u1']);
   const [notes, setNotes] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState('');
@@ -87,7 +87,7 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       setEndDate(event.endDate ?? '');
       setStartTime(event.startTime);
       setEndTime(event.endTime);
-      setOwnerId(event.ownerId);
+      setOwnerIds(event.ownerIds?.length ? event.ownerIds : [event.ownerId]);
       setNotes(event.notes ?? '');
       setTags(event.tags ?? []);
       setSyncToGoogle(!!event.syncToGoogle);
@@ -97,7 +97,7 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       setEndDate('');
       setStartTime('09:00');
       setEndTime('10:00');
-      setOwnerId(data.users[0]?.id ?? 'u1');
+      setOwnerIds([data.users[0]?.id ?? 'u1']);
       setNotes('');
       setTags([]);
       setNewTag('');
@@ -106,6 +106,9 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
   }, [visible, event, defaultDate, data.users]);
 
   const isMultiDay = !!endDate && endDate !== date;
+
+  const toggleOwner = (id: string) =>
+    setOwnerIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
 
   const pickDate = (key: string) => {
     if (dateMode === 'start') {
@@ -127,6 +130,7 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       return notify('時間格式錯誤', '請用 HH:MM(24 小時制)');
     // 跨日行程允許結束時刻早於開始時刻(因為在不同天)
     if (!isMultiDay && endTime <= startTime) return notify('結束時間需晚於開始時間');
+    if (ownerIds.length === 0) return notify('請至少選擇一位成員');
 
     const ev: CalendarEvent = {
       id: event?.id ?? uid(),
@@ -135,7 +139,8 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       endDate: isMultiDay ? endDate : undefined,
       startTime,
       endTime,
-      ownerId,
+      ownerId: ownerIds[0],
+      ownerIds,
       createdBy: event?.createdBy ?? data.users[0]?.id ?? 'u1',
       notes: notes.trim() || undefined,
       tags: tags.length ? tags : undefined,
@@ -219,15 +224,15 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
               </View>
             </View>
 
-            <Text style={s.label}>這是誰的行程?</Text>
+            <Text style={s.label}>這是誰的行程?(可複選)</Text>
             <View style={s.chips}>
               {data.users.map((u) => (
                 <Chip
                   key={u.id}
                   label={u.name}
                   color={u.color}
-                  active={ownerId === u.id}
-                  onPress={() => setOwnerId(u.id)}
+                  active={ownerIds.includes(u.id)}
+                  onPress={() => toggleOwner(u.id)}
                 />
               ))}
             </View>
