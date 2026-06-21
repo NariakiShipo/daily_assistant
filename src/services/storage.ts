@@ -17,6 +17,7 @@ export const defaultData: AppData = {
     remindDaysBefore: 3,
     spaceId: null,
     customTags: [],
+    periodFieldNames: [],
   },
 };
 

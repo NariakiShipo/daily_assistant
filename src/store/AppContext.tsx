@@ -41,6 +41,9 @@ interface AppContextValue {
   // tags
   addCustomTag: (name: string) => void;
   removeCustomTag: (name: string) => void;
+  // period custom fields (記住的欄位名稱)
+  addPeriodFieldName: (name: string) => void;
+  removePeriodFieldName: (name: string) => void;
   // users & settings
   updateUser: (u: UserProfile) => void;
   setNotificationsEnabled: (on: boolean) => Promise<void>;
@@ -304,6 +307,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   }, []);
 
+  const addPeriodFieldName = useCallback((name: string) => {
+    setData((d) => {
+      const cur = d.settings.periodFieldNames ?? [];
+      if (cur.includes(name)) return d;
+      return { ...d, settings: { ...d.settings, periodFieldNames: [...cur, name] } };
+    });
+  }, []);
+
+  const removePeriodFieldName = useCallback((name: string) => {
+    setData((d) => ({
+      ...d,
+      settings: {
+        ...d.settings,
+        periodFieldNames: (d.settings.periodFieldNames ?? []).filter((n) => n !== name),
+      },
+    }));
+  }, []);
+
   const updateUser = useCallback(
     (u: UserProfile) => {
       setData((d) => {
@@ -394,6 +415,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     deleteCourse,
     addCustomTag,
     removeCustomTag,
+    addPeriodFieldName,
+    removePeriodFieldName,
     updateUser,
     setNotificationsEnabled,
     setGoogleToken,

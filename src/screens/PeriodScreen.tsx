@@ -237,6 +237,11 @@ const PeriodScreen: React.FC = () => {
                 ? ` – ${formatDateZh(p.endDate)}(${daysBetween(p.startDate, p.endDate) + 1} 天)`
                 : ' – 進行中'}
             </Text>
+            {p.customFields?.map((f) => (
+              <Text key={f.name} style={s.historyField}>
+                · {f.name}:{f.value}
+              </Text>
+            ))}
             <Text style={s.historyMeta}>由 {recorderName(p.recordedBy)} 記錄(點一下編輯,長按刪除)</Text>
           </Card>
         </TouchableOpacity>
@@ -260,6 +265,7 @@ const s = StyleSheet.create({
   disclaimer: { fontSize: 11, color: colors.textMuted, marginTop: spacing.md, fontStyle: 'italic' },
   empty: { color: colors.textMuted, fontSize: 13 },
   historyMain: { fontSize: 14, fontWeight: '600', color: colors.text },
+  historyField: { fontSize: 13, color: colors.text, marginTop: 3 },
   historyMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
 });
 

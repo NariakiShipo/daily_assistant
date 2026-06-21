@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import {
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -21,18 +24,37 @@ interface Props {
   record: PeriodRecord | null;
 }
 
+interface FieldRow {
+  name: string;
+  value: string;
+}
+
 const PeriodEditModal: React.FC<Props> = ({ visible, onClose, record }) => {
-  const { updatePeriod, deletePeriod } = useApp();
+  const { data, updatePeriod, deletePeriod, addPeriodFieldName, removePeriodFieldName } = useApp();
 
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState(''); // 空字串 = 進行中
   const [mode, setMode] = useState<'start' | 'end'>('start');
+  const [fields, setFields] = useState<FieldRow[]>([]);
+  const [newFieldName, setNewFieldName] = useState('');
 
   useEffect(() => {
     if (!visible || !record) return;
     setStartDate(record.startDate);
     setEndDate(record.endDate ?? '');
     setMode('start');
+    setNewFieldName('');
+    // 欄位 = 記住的範本欄位 + 這筆紀錄自己有的欄位(填回既有值)
+    const names = data.settings.periodFieldNames ?? [];
+    const existing = record.customFields ?? [];
+    const valueOf = new Map(existing.map((f) => [f.name, f.value]));
+    const merged: FieldRow[] = [
+      ...names.map((n) => ({ name: n, value: valueOf.get(n) ?? '' })),
+      ...existing.filter((f) => !names.includes(f.name)),
+    ];
+    setFields(merged);
+    // data.settings.periodFieldNames 只在開啟時當初始範本,不需放進依賴
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, record]);
 
   const today = todayKey();
@@ -51,9 +73,37 @@ const PeriodEditModal: React.FC<Props> = ({ visible, onClose, record }) => {
     }
   };
 
+  const setFieldValue = (name: string, value: string) =>
+    setFields((cur) => cur.map((f) => (f.name === name ? { ...f, value } : f)));
+
+  const addField = () => {
+    const name = newFieldName.trim();
+    if (!name) return;
+    if (fields.some((f) => f.name === name)) {
+      setNewFieldName('');
+      return notify('已有同名欄位');
+    }
+    setFields((cur) => [...cur, { name, value: '' }]);
+    addPeriodFieldName(name); // 記住,之後新紀錄自動帶出
+    setNewFieldName('');
+  };
+
+  const removeField = (name: string) => {
+    setFields((cur) => cur.filter((f) => f.name !== name));
+    removePeriodFieldName(name); // 從範本移除(其他紀錄已填的值會保留)
+  };
+
   const save = async () => {
     if (!record) return;
-    await updatePeriod({ ...record, startDate, endDate: endDate || undefined });
+    const customFields = fields
+      .map((f) => ({ name: f.name.trim(), value: f.value.trim() }))
+      .filter((f) => f.name && f.value);
+    await updatePeriod({
+      ...record,
+      startDate,
+      endDate: endDate || undefined,
+      customFields: customFields.length ? customFields : undefined,
+    });
     onClose();
   };
 
@@ -72,7 +122,10 @@ const PeriodEditModal: React.FC<Props> = ({ visible, onClose, record }) => {
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={s.backdrop}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={s.backdrop}
+      >
         <View style={s.sheet}>
           <View style={s.header}>
             <Text style={s.headerTitle}>編輯經期紀錄</Text>
@@ -80,7 +133,7 @@ const PeriodEditModal: React.FC<Props> = ({ visible, onClose, record }) => {
               <Text style={s.close}>✕</Text>
             </TouchableOpacity>
           </View>
-          <ScrollView>
+          <ScrollView keyboardShouldPersistTaps="handled">
             <Text style={s.label}>正在調整哪個日期?</Text>
             <View style={{ flexDirection: 'row', marginBottom: spacing.xs }}>
               <Chip
@@ -117,12 +170,55 @@ const PeriodEditModal: React.FC<Props> = ({ visible, onClose, record }) => {
                 onPress={() => setEndDate('')}
               />
             )}
+
+            {/* 自訂欄位紀錄 */}
+            <Text style={[s.label, { marginTop: spacing.md }]}>
+              自訂紀錄(例如:經前痛持續時間、症狀程度)
+            </Text>
+            {fields.map((f) => (
+              <View key={f.name} style={s.fieldRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.fieldName}>{f.name}</Text>
+                  <TextInput
+                    style={s.input}
+                    value={f.value}
+                    onChangeText={(v) => setFieldValue(f.name, v)}
+                    placeholder="例如:2 小時 / 輕微"
+                    placeholderTextColor={colors.textMuted}
+                  />
+                </View>
+                <TouchableOpacity
+                  style={s.fieldRemove}
+                  onPress={() => removeField(f.name)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={s.fieldRemoveText}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+            {fields.length === 0 && (
+              <Text style={s.fieldEmpty}>尚無自訂欄位,在下方新增一個吧。</Text>
+            )}
+            <View style={s.addRow}>
+              <TextInput
+                style={[s.input, { flex: 1 }]}
+                value={newFieldName}
+                onChangeText={setNewFieldName}
+                placeholder="新增欄位名稱,例如:經前痛持續時間"
+                placeholderTextColor={colors.textMuted}
+                onSubmitEditing={addField}
+              />
+              <TouchableOpacity style={s.addBtn} onPress={addField}>
+                <Text style={s.addBtnText}>＋ 新增</Text>
+              </TouchableOpacity>
+            </View>
+
             <Button label="儲存變更" onPress={() => void save()} />
             <Button label="刪除紀錄" variant="danger" onPress={remove} />
             <View style={{ height: spacing.xl }} />
           </ScrollView>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };
@@ -145,6 +241,35 @@ const s = StyleSheet.create({
   headerTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
   close: { fontSize: 18, color: colors.textMuted, padding: spacing.xs },
   label: { fontSize: 13, fontWeight: '600', color: colors.textMuted, marginBottom: 4, marginTop: spacing.sm },
+  input: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: colors.text,
+  },
+  fieldRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: spacing.sm },
+  fieldName: { fontSize: 12, color: colors.text, fontWeight: '600', marginBottom: 4 },
+  fieldRemove: {
+    width: 32,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: spacing.xs,
+  },
+  fieldRemoveText: { fontSize: 16, color: colors.textMuted },
+  fieldEmpty: { fontSize: 12, color: colors.textMuted, marginBottom: spacing.sm },
+  addRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.xs },
+  addBtn: {
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+  },
+  addBtnText: { color: colors.primary, fontSize: 14, fontWeight: '700' },
 });
 
 export default PeriodEditModal;

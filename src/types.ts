@@ -58,6 +58,14 @@ export interface CourseEntry {
 
 export type FlowLevel = 'light' | 'medium' | 'heavy';
 
+/** 自訂欄位的一筆紀錄值(自描述,跟著紀錄一起同步) */
+export interface PeriodCustomField {
+  /** 欄位名稱,例如「經前痛持續時間」 */
+  name: string;
+  /** 使用者填的內容,例如「2 小時」 */
+  value: string;
+}
+
 /** 一次經期紀錄 */
 export interface PeriodRecord {
   id: string;
@@ -68,6 +76,8 @@ export interface PeriodRecord {
   flow?: FlowLevel;
   symptoms?: string[];
   notes?: string;
+  /** 自訂欄位紀錄(經前痛持續時間、症狀程度⋯) */
+  customFields?: PeriodCustomField[];
   /** 由誰記錄(允許他人協助紀錄) */
   recordedBy: string;
 }
@@ -99,6 +109,8 @@ export interface AppSettings {
   spaceId?: string | null;
   /** 使用者自訂的行程標籤 */
   customTags?: string[];
+  /** 記住的經期自訂欄位名稱(新紀錄會自動帶出這些欄位) */
+  periodFieldNames?: string[];
 }
 
 export interface AppData {
