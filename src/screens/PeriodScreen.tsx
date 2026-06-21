@@ -16,6 +16,7 @@ import { recommendations } from '../services/recommendations';
 import { Button, Card, Chip, SectionTitle } from '../components/ui';
 import PeriodEditModal from '../components/PeriodEditModal';
 import MiniCalendar from '../components/MiniCalendar';
+import PeriodCustomFields, { FieldRow, buildFieldRows, toCustomFields } from '../components/PeriodCustomFields';
 
 const PeriodScreen: React.FC = () => {
   const { data, prediction, phase, addPeriod, updatePeriod, deletePeriod } = useApp();
@@ -24,6 +25,10 @@ const PeriodScreen: React.FC = () => {
   const today = todayKey();
   const [recordDate, setRecordDate] = useState(today);
   const [editing, setEditing] = useState<PeriodRecord | null>(null);
+  // 記錄當下的自訂欄位(預設帶出記住的欄位範本)
+  const [recordFields, setRecordFields] = useState<FieldRow[]>(() =>
+    buildFieldRows(data.settings.periodFieldNames ?? [], [])
+  );
   const sorted = useMemo(
     () => [...data.periods].sort((a, b) => b.startDate.localeCompare(a.startDate)),
     [data.periods]
@@ -67,9 +72,12 @@ const PeriodScreen: React.FC = () => {
       id: uid(),
       startDate: recordDate,
       recordedBy: recorder,
+      customFields: toCustomFields(recordFields),
     };
     addPeriod(rec);
     notify('已記錄', `經期開始:${formatDateZh(recordDate)}(由 ${recorderName(recorder)} 記錄)`);
+    // 重設為空白範本,供下次記錄使用
+    setRecordFields(buildFieldRows(data.settings.periodFieldNames ?? [], []));
   };
 
   const endPeriod = () => {
@@ -185,6 +193,14 @@ const PeriodScreen: React.FC = () => {
           <View style={{ flexDirection: 'row', marginTop: spacing.sm }}>
             <Chip label="回到今天" onPress={() => setRecordDate(today)} />
           </View>
+        )}
+        {!ongoing && (
+          <>
+            <Text style={[s.label, { marginTop: spacing.md }]}>
+              自訂紀錄(選填,例如:經前痛持續時間)
+            </Text>
+            <PeriodCustomFields fields={recordFields} onChange={setRecordFields} />
+          </>
         )}
         {!ongoing ? (
           <Button
