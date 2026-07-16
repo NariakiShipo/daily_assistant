@@ -20,6 +20,7 @@ import {
 } from '../utils/date';
 import { Card, Chip, Dot, SectionTitle } from '../components/ui';
 import EventModal from '../components/EventModal';
+import DayPreview from '../components/DayPreview';
 
 type ViewMode = 'time' | 'person';
 
@@ -38,6 +39,7 @@ const CalendarScreen: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('time');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<CalendarEvent | null>(null);
+  const [previewKey, setPreviewKey] = useState<string | null>(null);
 
   const cells = useMemo(() => monthGrid(year, month), [year, month]);
 
@@ -67,7 +69,7 @@ const CalendarScreen: React.FC = () => {
     [data.events, monthStart, monthEnd, filterUser, filterTag]
   );
 
-  /** 跨日行程展開到範圍內每一天(上限 62 天防呆) */
+  /** 跨日行程展開到範圍內每一天(上限 62 天防呆),每天依開始時間排序 */
   const eventsByDate = useMemo(() => {
     const map: Record<string, CalendarEvent[]> = {};
     for (const e of monthEvents) {
@@ -79,6 +81,9 @@ const CalendarScreen: React.FC = () => {
         d = addDays(d, 1);
         guard++;
       }
+    }
+    for (const k of Object.keys(map)) {
+      map[k].sort((a, b) => a.startTime.localeCompare(b.startTime));
     }
     return map;
   }, [monthEvents]);
@@ -208,22 +213,34 @@ const CalendarScreen: React.FC = () => {
                     !isPeriod && isPredicted && { backgroundColor: colors.predictedDay },
                     isSelected && s.cellSelected,
                   ]}
-                  onPress={() => setSelected(key)}
+                  onPress={() => {
+                    setSelected(key);
+                    if (evs.length) setPreviewKey(key);
+                  }}
                 >
                   <Text style={[s.cellDay, isToday && s.todayText]}>{dayNum}</Text>
-                  <View style={s.dots}>
-                    {evs
-                      .flatMap((e) =>
-                        ownersOf(e).map((oid) => ({
-                          key: `${e.id}-${oid}`,
-                          color: userOf(oid)?.color ?? colors.primary,
-                        }))
-                      )
-                      .slice(0, 3)
-                      .map((dot) => (
-                        <Dot key={dot.key} color={dot.color} />
-                      ))}
-                  </View>
+                  {evs.slice(0, 3).map((e) => {
+                    const done = !!e.tags?.includes(TAG_DONE);
+                    return (
+                      <TouchableOpacity
+                        key={e.id}
+                        style={[
+                          s.cellChip,
+                          { backgroundColor: userOf(ownersOf(e)[0])?.color ?? colors.primary },
+                          done && { opacity: 0.55 },
+                        ]}
+                        onPress={() => openEdit(e)}
+                      >
+                        <Text
+                          style={[s.cellChipText, done && s.cellChipTextDone]}
+                          numberOfLines={1}
+                        >
+                          {e.title}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  {evs.length > 3 && <Text style={s.cellMore}>+{evs.length - 3}</Text>}
                 </TouchableOpacity>
               );
             })}
@@ -298,6 +315,23 @@ const CalendarScreen: React.FC = () => {
       <TouchableOpacity style={s.fab} onPress={openNew}>
         <Text style={s.fabText}>＋</Text>
       </TouchableOpacity>
+
+      <DayPreview
+        visible={!!previewKey}
+        dateKey={previewKey ?? ''}
+        events={previewKey ? (eventsByDate[previewKey] ?? []) : []}
+        users={data.users}
+        onClose={() => setPreviewKey(null)}
+        onPickEvent={(ev) => {
+          setPreviewKey(null);
+          // 等前一個 Modal 關閉再開編輯,避免 iOS 上兩個 Modal 疊加
+          setTimeout(() => openEdit(ev), 150);
+        }}
+        onAddNew={() => {
+          setPreviewKey(null);
+          setTimeout(openNew, 150);
+        }}
+      />
 
       <EventModal
         visible={modalOpen}
@@ -398,15 +432,24 @@ const s = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
   cell: {
     width: CELL,
-    height: 52,
-    alignItems: 'center',
+    minHeight: 86,
     paddingTop: 4,
+    paddingHorizontal: 2,
+    paddingBottom: 3,
     borderRadius: radius.sm,
   },
   cellSelected: { borderWidth: 2, borderColor: colors.primary },
-  cellDay: { fontSize: 13, color: colors.text },
+  cellDay: { fontSize: 13, color: colors.text, textAlign: 'center' },
   todayText: { fontWeight: '900', color: colors.primary },
-  dots: { flexDirection: 'row', marginTop: 2 },
+  cellChip: {
+    borderRadius: 3,
+    paddingHorizontal: 3,
+    paddingVertical: 1,
+    marginTop: 2,
+  },
+  cellChipText: { fontSize: 10, color: '#fff', fontWeight: '600' },
+  cellChipTextDone: { textDecorationLine: 'line-through' },
+  cellMore: { fontSize: 10, color: colors.textMuted, textAlign: 'center', marginTop: 1 },
   legend: {
     flexDirection: 'row',
     alignItems: 'center',
