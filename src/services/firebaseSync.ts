@@ -26,7 +26,7 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured } from '../config';
-import { CalendarEvent, CourseEntry, PeriodRecord, UserProfile } from '../types';
+import { CalendarEvent, CourseEntry, PeriodRecord, SemesterMeta, UserProfile } from '../types';
 
 let app: FirebaseApp | null = null;
 let db: Firestore | null = null;
@@ -104,7 +104,8 @@ export async function uploadLocal(
   code: string,
   events: CalendarEvent[],
   periods: PeriodRecord[],
-  courses: CourseEntry[]
+  courses: CourseEntry[],
+  semesters?: SemesterMeta[]
 ): Promise<void> {
   const d = getDb();
   if (!d) return;
@@ -112,6 +113,40 @@ export async function uploadLocal(
   for (const ev of events) batch.set(doc(d, 'spaces', code, 'events', ev.id), ev);
   for (const p of periods) batch.set(doc(d, 'spaces', code, 'periods', p.id), p);
   for (const c of courses) batch.set(doc(d, 'spaces', code, 'courses', c.id), c);
+  await batch.commit();
+  if (semesters?.length) await mergeSemesters(code, semesters);
+}
+
+/** 學期清單存在空間根文件上(小量資料,整份覆蓋) */
+export async function saveSemesters(code: string, semesters: SemesterMeta[]): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code), { semesters }, { merge: true });
+}
+
+/** 本機學期與雲端聯集(同 id 以本機為準),避免剛加入的裝置蓋掉雲端清單 */
+export async function mergeSemesters(code: string, local: SemesterMeta[]): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  const snap = await getDoc(doc(d, 'spaces', code));
+  const cloud = (snap.data()?.semesters as SemesterMeta[] | undefined) ?? [];
+  const merged = new Map<string, SemesterMeta>();
+  for (const s of cloud) merged.set(s.id, s);
+  for (const s of local) merged.set(s.id, s);
+  await setDoc(doc(d, 'spaces', code), { semesters: [...merged.values()] }, { merge: true });
+}
+
+/** 課表覆蓋:一次刪除舊課程並寫入新課程(匯入用) */
+export async function replaceCourseDocs(
+  code: string,
+  removeIds: string[],
+  added: CourseEntry[]
+): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  const batch = writeBatch(d);
+  for (const id of removeIds) batch.delete(doc(d, 'spaces', code, 'courses', id));
+  for (const c of added) batch.set(doc(d, 'spaces', code, 'courses', c.id), c);
   await batch.commit();
 }
 
@@ -126,6 +161,7 @@ export interface SpaceCallbacks {
   onEvents: (events: CalendarEvent[], remoteChanges: RemoteEventChange[]) => void;
   onPeriods: (periods: PeriodRecord[]) => void;
   onCourses: (courses: CourseEntry[]) => void;
+  onSemesters?: (semesters: SemesterMeta[]) => void;
 }
 
 /** 訂閱共享空間,回傳取消訂閱函式 */
@@ -136,6 +172,7 @@ export function subscribeSpace(code: string, cb: SpaceCallbacks): () => void {
   const unsubSpace = onSnapshot(doc(d, 'spaces', code), (snap) => {
     const data = snap.data();
     if (data?.users) cb.onUsers(data.users as UserProfile[]);
+    if (data?.semesters) cb.onSemesters?.(data.semesters as SemesterMeta[]);
   });
 
   let firstEvents = true;

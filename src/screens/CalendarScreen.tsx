@@ -12,15 +12,17 @@ import { colors, priorityColors, radius, spacing, tagColor } from '../theme';
 import {
   formatDateZh,
   formatMonthZh,
+  fromDateKey,
   isWithin,
   monthGrid,
   todayKey,
   weekdayZh,
   addDays,
 } from '../utils/date';
+import { PERIOD_SLOTS } from '../constants/timetable';
 import { Card, Chip, Dot, SectionTitle } from '../components/ui';
 import EventModal from '../components/EventModal';
-import DayPreview from '../components/DayPreview';
+import DayPreview, { PreviewCourse } from '../components/DayPreview';
 
 type ViewMode = 'time' | 'person';
 
@@ -87,6 +89,40 @@ const CalendarScreen: React.FC = () => {
     }
     return map;
   }, [monthEvents]);
+
+  /** 本月每天的課程(依課表推算:有學期的看起訖日,未分類課恆生效) */
+  const coursesByDate = useMemo(() => {
+    const map: Record<string, PreviewCourse[]> = {};
+    if (!data.courses.length) return map;
+    const semById = new Map(data.semesters.map((sm) => [sm.id, sm]));
+    for (const key of cells) {
+      if (!key) continue;
+      const weekday = fromDateKey(key).getDay();
+      if (weekday < 1 || weekday > 5) continue;
+      const list = data.courses
+        .filter((c) => {
+          if (c.weekday !== weekday) return false;
+          if (filterUser && c.ownerId !== filterUser) return false;
+          if (!c.semesterId) return true;
+          const sem = semById.get(c.semesterId);
+          return !sem || isWithin(key, sem.startDate, sem.endDate);
+        })
+        .map(
+          (c): PreviewCourse => ({
+            id: c.id,
+            title: c.title,
+            location: c.location,
+            startTime: PERIOD_SLOTS[c.startPeriod]?.start ?? '00:00',
+            endTime: PERIOD_SLOTS[Math.min(c.endPeriod, PERIOD_SLOTS.length - 1)]?.end ?? '00:00',
+            color: c.color,
+            ownerId: c.ownerId,
+          })
+        )
+        .sort((a, b) => a.startTime.localeCompare(b.startTime));
+      if (list.length) map[key] = list;
+    }
+    return map;
+  }, [cells, data.courses, data.semesters, filterUser]);
 
   /** 經期實際日(粉底)與預測區間(淡粉框) */
   const periodDays = useMemo(() => {
@@ -215,7 +251,7 @@ const CalendarScreen: React.FC = () => {
                   ]}
                   onPress={() => {
                     setSelected(key);
-                    if (evs.length) setPreviewKey(key);
+                    if (evs.length || coursesByDate[key]) setPreviewKey(key);
                   }}
                 >
                   <Text style={[s.cellDay, isToday && s.todayText]}>{dayNum}</Text>
@@ -320,6 +356,7 @@ const CalendarScreen: React.FC = () => {
         visible={!!previewKey}
         dateKey={previewKey ?? ''}
         events={previewKey ? (eventsByDate[previewKey] ?? []) : []}
+        courses={previewKey ? (coursesByDate[previewKey] ?? []) : []}
         users={data.users}
         onClose={() => setPreviewKey(null)}
         onPickEvent={(ev) => {

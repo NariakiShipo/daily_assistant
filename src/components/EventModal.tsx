@@ -23,6 +23,7 @@ import {
 } from '../utils/date';
 import { confirmDialog, notify } from '../utils/dialog';
 import { useApp } from '../store/AppContext';
+import { findEventClashes } from '../services/conflicts';
 import { Button, Chip } from './ui';
 import MiniCalendar from './MiniCalendar';
 import TimeField from './TimeField';
@@ -167,9 +168,34 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       syncToGoogle,
       googleEventId: event?.googleEventId,
     };
-    if (event) await updateEvent(ev);
-    else await addEvent(ev);
-    onClose();
+
+    const persist = async () => {
+      if (event) await updateEvent(ev);
+      else await addEvent(ev);
+      onClose();
+    };
+
+    // 與課表時段重疊 → 提醒(仍可堅持儲存)
+    const clashes = findEventClashes(ev, data.courses, data.semesters);
+    if (clashes.length) {
+      const nameOf = (id: string) => data.users.find((u) => u.id === id)?.name ?? '?';
+      const lines = clashes
+        .slice(0, 3)
+        .map(
+          (c) =>
+            `${formatDateZh(c.date)} 「${c.slot.course.title}」` +
+            `${minutesToTime(c.slot.startMin)}–${minutesToTime(c.slot.endMin)}(${nameOf(c.ownerId)}的課)`
+        );
+      const more = clashes.length > 3 ? `\n…共 ${clashes.length} 處重疊` : '';
+      confirmDialog(
+        '與課表時間重疊',
+        `${lines.join('\n')}${more}\n\n仍要儲存這個行程嗎?`,
+        () => void persist(),
+        { confirmLabel: '仍要儲存' }
+      );
+      return;
+    }
+    await persist();
   };
 
   const remove = () => {

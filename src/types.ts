@@ -63,16 +63,44 @@ export interface CourseEntry {
   id: string;
   title: string;
   location?: string;
-  /** 1 = 週一 ⋯ 5 = 週五 */
+  /** 1 = 週一 ⋯ 5 = 週五;-1 = 無固定時段(UNSCHEDULED_WEEKDAY) */
   weekday: number;
-  /** 起始節次(PERIOD_SLOTS 索引) */
+  /** 起始節次(PERIOD_SLOTS 索引;無時段課固定為 0) */
   startPeriod: number;
   /** 結束節次(PERIOD_SLOTS 索引,>= startPeriod) */
   endPeriod: number;
   color?: string;
   /** 這是誰的課表 */
   ownerId: string;
+  /** 匯入來源:'ntut' = 北科課程好朋友;未設 = 手動建立 */
+  source?: 'ntut';
+  /** 所屬學期(SemesterMeta.id,例如 '115-1');未設 = 未分類(舊資料) */
+  semesterId?: string;
+  /** 北科課號(同門課的多個時段共用) */
+  ntutCourseId?: string;
+  /** 學分(統計用) */
+  credit?: number;
+  /** 授課教師 */
+  teacher?: string;
 }
+
+/** 學期:課表按學期分頁保存,起訖日用於行程衝突判斷 */
+export interface SemesterMeta {
+  /** '115-1' = 115 學年度第 1 學期 */
+  id: string;
+  /** YYYY-MM-DD 學期起日 */
+  startDate: string;
+  /** YYYY-MM-DD 學期迄日 */
+  endDate: string;
+  /** 匯入時的班級,例如「資工三」 */
+  className?: string;
+}
+
+/** 學期排序權重(新的在前) */
+export const semesterOrder = (id: string): number => {
+  const [y, s] = id.split('-').map(Number);
+  return (y || 0) * 10 + (s || 0);
+};
 
 export type FlowLevel = 'light' | 'medium' | 'heavy';
 
@@ -136,5 +164,7 @@ export interface AppData {
   events: CalendarEvent[];
   periods: PeriodRecord[];
   courses: CourseEntry[];
+  /** 已知的學期(匯入課表時建立) */
+  semesters: SemesterMeta[];
   settings: AppSettings;
 }

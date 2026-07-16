@@ -11,6 +11,7 @@ export const defaultData: AppData = {
   events: [],
   periods: [],
   courses: [],
+  semesters: [],
   settings: {
     notificationsEnabled: false,
     googleConnected: false,

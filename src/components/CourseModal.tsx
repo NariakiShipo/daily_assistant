@@ -12,11 +12,11 @@ import {
 } from 'react-native';
 import { CourseEntry } from '../types';
 import { colors, radius, spacing, tagColor, userColorChoices } from '../theme';
-import { PERIOD_SLOTS, WEEKDAYS } from '../constants/timetable';
+import { PERIOD_SLOTS, UNSCHEDULED_WEEKDAY, WEEKDAYS } from '../constants/timetable';
 import { uid } from '../utils/date';
 import { confirmDialog, notify } from '../utils/dialog';
 import { useApp } from '../store/AppContext';
-import { Button } from './ui';
+import { Button, Chip } from './ui';
 
 interface Props {
   visible: boolean;
@@ -25,6 +25,8 @@ interface Props {
   course: CourseEntry | null;
   /** 新增時的課表擁有者 */
   ownerId: string;
+  /** 目前檢視的學期(null = 未分類);新增課程會標記此學期,重疊檢查也以此為範圍 */
+  semesterId: string | null;
   defaultWeekday: number;
   defaultPeriod: number;
 }
@@ -36,6 +38,7 @@ const CourseModal: React.FC<Props> = ({
   onClose,
   course,
   ownerId,
+  semesterId,
   defaultWeekday,
   defaultPeriod,
 }) => {
@@ -45,16 +48,24 @@ const CourseModal: React.FC<Props> = ({
   const [location, setLocation] = useState('');
   const [color, setColor] = useState<string | null>(null);
   const [cells, setCells] = useState<Set<string>>(new Set());
+  /** 無固定時段(實務專題等):不佔格子,顯示在課表最右欄 */
+  const [noTime, setNoTime] = useState(false);
 
   const owner = course?.ownerId ?? ownerId;
+  /** 是否屬於目前檢視的學期分頁(未分類 = 無學期標記) */
+  const inBucket = (c: CourseEntry): boolean =>
+    semesterId ? c.semesterId === semesterId : !c.semesterId;
 
-  /** 同名同人的所有時段 = 同一門課 */
+  /** 同名同人同學期的所有時段 = 同一門課 */
   const group = useMemo(
     () =>
       course
-        ? data.courses.filter((c) => c.ownerId === course.ownerId && c.title === course.title)
+        ? data.courses.filter(
+            (c) => c.ownerId === course.ownerId && c.title === course.title && inBucket(c)
+          )
         : [],
-    [course, data.courses]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [course, data.courses, semesterId]
   );
 
   useEffect(() => {
@@ -63,8 +74,10 @@ const CourseModal: React.FC<Props> = ({
       setTitle(course.title);
       setLocation(course.location ?? '');
       setColor(course.color ?? null);
+      setNoTime(course.weekday === UNSCHEDULED_WEEKDAY);
       const set = new Set<string>();
       for (const g of group) {
+        if (g.weekday < 1) continue; // 無時段項目不佔格子
         for (let i = g.startPeriod; i <= g.endPeriod; i++) set.add(cellKey(g.weekday, i));
       }
       setCells(set);
@@ -72,7 +85,9 @@ const CourseModal: React.FC<Props> = ({
       setTitle('');
       setLocation('');
       setColor(null);
-      setCells(new Set([cellKey(defaultWeekday, defaultPeriod)]));
+      const unscheduled = defaultWeekday === UNSCHEDULED_WEEKDAY;
+      setNoTime(unscheduled);
+      setCells(unscheduled ? new Set() : new Set([cellKey(defaultWeekday, defaultPeriod)]));
     }
     // group 由 course 推導,只需在開啟時初始化一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -114,26 +129,33 @@ const CourseModal: React.FC<Props> = ({
   const save = () => {
     const name = title.trim();
     if (!name) return notify('請輸入課程名稱');
-    if (cells.size === 0) return notify('請至少選擇一個節次');
+    if (!noTime && cells.size === 0) return notify('請至少選擇一個節次');
 
-    const runs = toRuns();
+    // 無固定時段:存成單一項目,不做時段重疊檢查
+    const runs = noTime
+      ? [{ weekday: UNSCHEDULED_WEEKDAY, start: 0, end: 0 }]
+      : toRuns();
     const groupIds = new Set(group.map((g) => g.id));
 
-    // 與其他課程的時段重疊 → 擋下
-    for (const r of runs) {
-      const clash = data.courses.find(
-        (c) =>
-          !groupIds.has(c.id) &&
-          c.ownerId === owner &&
-          c.weekday === r.weekday &&
-          c.startPeriod <= r.end &&
-          c.endPeriod >= r.start
-      );
-      if (clash) {
-        return notify(
-          '時段重疊',
-          `週${WEEKDAYS[r.weekday - 1]} 第 ${PERIOD_SLOTS[r.start].label}~${PERIOD_SLOTS[r.end].label} 節與「${clash.title}」衝突。`
+    // 與同學期其他課程的時段重疊 → 擋下(無時段課不參與)
+    if (!noTime) {
+      for (const r of runs) {
+        const clash = data.courses.find(
+          (c) =>
+            !groupIds.has(c.id) &&
+            c.ownerId === owner &&
+            inBucket(c) &&
+            c.weekday >= 1 &&
+            c.weekday === r.weekday &&
+            c.startPeriod <= r.end &&
+            c.endPeriod >= r.start
         );
+        if (clash) {
+          return notify(
+            '時段重疊',
+            `週${WEEKDAYS[r.weekday - 1]} 第 ${PERIOD_SLOTS[r.start].label}~${PERIOD_SLOTS[r.end].label} 節與「${clash.title}」衝突。`
+          );
+        }
       }
     }
 
@@ -142,6 +164,7 @@ const CourseModal: React.FC<Props> = ({
     const finalColor = color ?? group[0]?.color ?? sameTitle?.color ?? tagColor(name);
 
     // 調和:沿用既有 id 更新、不夠的新增、多出來的刪除
+    // (更新時以展開保留匯入標記:source / ntutCourseId / credit / teacher)
     const reusable = [...group];
     for (const r of runs) {
       const base = {
@@ -152,9 +175,10 @@ const CourseModal: React.FC<Props> = ({
         endPeriod: r.end,
         color: finalColor,
         ownerId: owner,
+        semesterId: semesterId ?? undefined,
       };
       const existing = reusable.pop();
-      if (existing) updateCourse({ ...base, id: existing.id });
+      if (existing) updateCourse({ ...existing, ...base });
       else addCourse({ ...base, id: uid() });
     }
     for (const leftover of reusable) deleteCourse(leftover.id);
@@ -206,36 +230,48 @@ const CourseModal: React.FC<Props> = ({
               placeholderTextColor={colors.textMuted}
             />
 
-            <Text style={s.label}>
-              上課時間(點格子可複選,不同天、不連續都可以,已選 {cells.size} 節)
-            </Text>
-            <View style={s.gridHead}>
-              <View style={s.gridLabelCol} />
-              {WEEKDAYS.map((w) => (
-                <Text key={w} style={s.gridHeadText}>
-                  {w}
-                </Text>
-              ))}
+            <Text style={s.label}>上課時間</Text>
+            <View style={s.noTimeRow}>
+              <Chip
+                label="無固定時段(放課表最右欄)"
+                active={noTime}
+                onPress={() => setNoTime(!noTime)}
+              />
             </View>
-            {PERIOD_SLOTS.map((slot, i) => (
-              <View key={slot.label} style={s.gridRow}>
-                <View style={s.gridLabelCol}>
-                  <Text style={s.gridLabelText}>{slot.label}</Text>
+            {!noTime && (
+              <>
+                <Text style={s.label}>
+                  點格子可複選,不同天、不連續都可以,已選 {cells.size} 節
+                </Text>
+                <View style={s.gridHead}>
+                  <View style={s.gridLabelCol} />
+                  {WEEKDAYS.map((w) => (
+                    <Text key={w} style={s.gridHeadText}>
+                      {w}
+                    </Text>
+                  ))}
                 </View>
-                {WEEKDAYS.map((_, wi) => {
-                  const on = cells.has(cellKey(wi + 1, i));
-                  return (
-                    <TouchableOpacity
-                      key={wi}
-                      style={[s.gridCell, on && s.gridCellOn]}
-                      onPress={() => toggleCell(wi + 1, i)}
-                    >
-                      {on && <Text style={s.gridCellTick}>✓</Text>}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            ))}
+                {PERIOD_SLOTS.map((slot, i) => (
+                  <View key={slot.label} style={s.gridRow}>
+                    <View style={s.gridLabelCol}>
+                      <Text style={s.gridLabelText}>{slot.label}</Text>
+                    </View>
+                    {WEEKDAYS.map((_, wi) => {
+                      const on = cells.has(cellKey(wi + 1, i));
+                      return (
+                        <TouchableOpacity
+                          key={wi}
+                          style={[s.gridCell, on && s.gridCellOn]}
+                          onPress={() => toggleCell(wi + 1, i)}
+                        >
+                          {on && <Text style={s.gridCellTick}>✓</Text>}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ))}
+              </>
+            )}
 
             <Text style={s.label}>顏色(不選則沿用同名課程或依課名自動配色)</Text>
             <View style={s.swatchRow}>
@@ -286,6 +322,7 @@ const s = StyleSheet.create({
     fontSize: 15,
     color: colors.text,
   },
+  noTimeRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 2 },
   gridHead: { flexDirection: 'row', marginBottom: 2 },
   gridHeadText: {
     flex: 1,

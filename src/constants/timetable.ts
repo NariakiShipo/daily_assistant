@@ -28,3 +28,18 @@ export const PERIOD_SLOTS: PeriodSlot[] = [
 
 /** 週一到週五(weekday 1~5) */
 export const WEEKDAYS = ['一', '二', '三', '四', '五'];
+
+/**
+ * 無固定時段課程(實務專題等)的 weekday 標記。
+ * 用 -1 是因為 Date.getDay() 回傳 0~6,-1 永遠不會與任何日期比對成功,
+ * 自然被衝突偵測與日曆顯示排除。
+ */
+export const UNSCHEDULED_WEEKDAY = -1;
+
+/**
+ * 北科課程系統的節次代號 → PERIOD_SLOTS 索引。
+ * 北科用 N 代表中午(本表的「彈」);D 節(21:15 後)超出本表範圍,不在對應內。
+ */
+export const NTUT_LABEL_TO_INDEX: Record<string, number> = Object.fromEntries(
+  PERIOD_SLOTS.map((slot, i) => [slot.label === '彈' ? 'N' : slot.label, i])
+);
