@@ -33,7 +33,13 @@
       ]
     },
     "web": {
-      "bundler": "metro"
+      "bundler": "metro",
+      "favicon": "./assets/icon.png",
+      "name": "Daily Assistant",
+      "shortName": "Daily Assistant",
+      "description": "Your personal daily assistant app",
+      "themeColor": "#E8638C",
+      "backgroundColor": "#FDF2F4"
     },
     "plugins": [
       "./plugins/withoutPushEntitlement",
