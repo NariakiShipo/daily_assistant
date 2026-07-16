@@ -13,6 +13,7 @@
     "@dataconnect/generated": "file:src/dataconnect-generated",
     "@expo/metro-runtime": "~5.0.4",
     "@react-native-async-storage/async-storage": "2.1.2",
+    "@react-native-community/datetimepicker": "8.4.1",
     "expo": "~53.0.0",
     "expo-auth-session": "~6.1.5",
     "expo-crypto": "~14.1.5",

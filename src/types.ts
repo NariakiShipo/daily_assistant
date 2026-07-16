@@ -32,7 +32,25 @@ export interface CalendarEvent {
   syncToGoogle?: boolean;
   /** 標籤(重要、完成⋯),可複選 */
   tags?: string[];
+  /** 優先順序(未設定 = 一般) */
+  priority?: EventPriority;
 }
+
+/** 行程優先順序 */
+export type EventPriority = 'high' | 'medium' | 'low';
+
+/** 優先順序顯示文字 */
+export const PRIORITY_LABELS: Record<EventPriority, string> = {
+  high: '高',
+  medium: '中',
+  low: '低',
+};
+
+/** 優先順序選項(依重要度排序) */
+export const PRIORITY_OPTIONS = (['high', 'medium', 'low'] as EventPriority[]).map((value) => ({
+  value,
+  label: PRIORITY_LABELS[value],
+}));
 
 /** 預設可選的行程標籤 */
 export const EVENT_TAGS = ['重要', '完成', '工作', '家庭'] as const;

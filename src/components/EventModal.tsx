@@ -11,13 +11,21 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { CalendarEvent, EVENT_TAGS } from '../types';
-import { colors, radius, spacing, tagColor } from '../theme';
-import { formatDateZh, isValidTime, isWithin, uid } from '../utils/date';
+import { CalendarEvent, EVENT_TAGS, EventPriority, PRIORITY_OPTIONS } from '../types';
+import { colors, priorityColors, radius, spacing, tagColor } from '../theme';
+import {
+  formatDateZh,
+  isValidTime,
+  isWithin,
+  minutesToTime,
+  timeToMinutes,
+  uid,
+} from '../utils/date';
 import { confirmDialog, notify } from '../utils/dialog';
 import { useApp } from '../store/AppContext';
 import { Button, Chip } from './ui';
 import MiniCalendar from './MiniCalendar';
+import TimeField from './TimeField';
 
 interface Props {
   visible: boolean;
@@ -39,6 +47,7 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
   const [endTime, setEndTime] = useState('10:00');
   const [ownerIds, setOwnerIds] = useState<string[]>([data.users[0]?.id ?? 'u1']);
   const [notes, setNotes] = useState('');
+  const [priority, setPriority] = useState<EventPriority | null>(null);
   const [tags, setTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState('');
   const [syncToGoogle, setSyncToGoogle] = useState(false);
@@ -89,6 +98,7 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       setEndTime(event.endTime);
       setOwnerIds(event.ownerIds?.length ? event.ownerIds : [event.ownerId]);
       setNotes(event.notes ?? '');
+      setPriority(event.priority ?? null);
       setTags(event.tags ?? []);
       setSyncToGoogle(!!event.syncToGoogle);
     } else {
@@ -99,6 +109,7 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       setEndTime('10:00');
       setOwnerIds([data.users[0]?.id ?? 'u1']);
       setNotes('');
+      setPriority(null);
       setTags([]);
       setNewTag('');
       setSyncToGoogle(false);
@@ -106,6 +117,14 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
   }, [visible, event, defaultDate, data.users]);
 
   const isMultiDay = !!endDate && endDate !== date;
+
+  /** 改開始時間時,結束時間跟著平移、維持原本時長(預設一小時) */
+  const changeStartTime = (t: string) => {
+    setStartTime(t);
+    if (isMultiDay) return; // 跨日行程的結束時刻在不同天,不聯動
+    const duration = timeToMinutes(endTime) - timeToMinutes(startTime);
+    setEndTime(minutesToTime(timeToMinutes(t) + (duration > 0 ? duration : 60)));
+  };
 
   const toggleOwner = (id: string) =>
     setOwnerIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
@@ -143,6 +162,7 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       ownerIds,
       createdBy: event?.createdBy ?? data.users[0]?.id ?? 'u1',
       notes: notes.trim() || undefined,
+      priority: priority ?? undefined,
       tags: tags.length ? tags : undefined,
       syncToGoogle,
       googleEventId: event?.googleEventId,
@@ -215,12 +235,12 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
 
             <View style={s.row}>
               <View style={s.half}>
-                <Text style={s.label}>開始(HH:MM)</Text>
-                <TextInput style={s.input} value={startTime} onChangeText={setStartTime} />
+                <Text style={s.label}>開始時間</Text>
+                <TimeField value={startTime} onChange={changeStartTime} />
               </View>
               <View style={s.half}>
-                <Text style={s.label}>結束(HH:MM)</Text>
-                <TextInput style={s.input} value={endTime} onChangeText={setEndTime} />
+                <Text style={s.label}>結束時間</Text>
+                <TimeField value={endTime} onChange={setEndTime} />
               </View>
             </View>
 
@@ -233,6 +253,19 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
                   color={u.color}
                   active={ownerIds.includes(u.id)}
                   onPress={() => toggleOwner(u.id)}
+                />
+              ))}
+            </View>
+
+            <Text style={s.label}>優先順序(再點一下可取消)</Text>
+            <View style={s.chips}>
+              {PRIORITY_OPTIONS.map((p) => (
+                <Chip
+                  key={p.value}
+                  label={p.label}
+                  color={priorityColors[p.value]}
+                  active={priority === p.value}
+                  onPress={() => setPriority(priority === p.value ? null : p.value)}
                 />
               ))}
             </View>

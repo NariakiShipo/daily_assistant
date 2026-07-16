@@ -7,8 +7,8 @@ import {
   View,
 } from 'react-native';
 import { useApp } from '../store/AppContext';
-import { CalendarEvent, EVENT_TAGS, TAG_DONE } from '../types';
-import { colors, radius, spacing, tagColor } from '../theme';
+import { CalendarEvent, EVENT_TAGS, PRIORITY_LABELS, TAG_DONE } from '../types';
+import { colors, priorityColors, radius, spacing, tagColor } from '../theme';
 import {
   formatDateZh,
   formatMonthZh,
@@ -327,6 +327,11 @@ const EventRow: React.FC<{
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
               <Text style={[s.eventTitle, done && s.eventTitleDone]}>{ev.title}</Text>
+              {ev.priority && (
+                <View style={[s.tagBadge, { backgroundColor: priorityColors[ev.priority] }]}>
+                  <Text style={s.tagBadgeText}>{PRIORITY_LABELS[ev.priority]}優先</Text>
+                </View>
+              )}
               {badges.map((t) => (
                 <View key={t} style={[s.tagBadge, { backgroundColor: tagColor(t) }]}>
                   <Text style={s.tagBadgeText}>{t}</Text>

@@ -49,6 +49,18 @@ export const weekdayZh = ['日', '一', '二', '三', '四', '五', '六'];
 
 export const isValidTime = (t: string): boolean => /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
 
+/** 'HH:MM' → 從 00:00 起算的分鐘數 */
+export const timeToMinutes = (t: string): number => {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+};
+
+/** 分鐘數 → 'HH:MM',超出當天範圍時夾在 00:00–23:59 */
+export const minutesToTime = (mins: number): string => {
+  const m = Math.max(0, Math.min(mins, 23 * 60 + 59));
+  return `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+};
+
 export const isValidDateKey = (k: string): boolean => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) return false;
   return toDateKey(fromDateKey(k)) === k;

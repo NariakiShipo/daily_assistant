@@ -24,6 +24,13 @@ export const tagColors: Record<string, string> = {
   家庭: '#E8638C',
 };
 
+/** 優先順序顏色(高/中/低) */
+export const priorityColors: Record<string, string> = {
+  high: '#D9534F',
+  medium: '#E5A33D',
+  low: '#4A90D9',
+};
+
 const tagPalette = [
   '#4A90D9', '#D9534F', '#2BAFA0', '#B85FA8', '#8A8F4A', '#D97B4A', '#5C7FD9', '#46A35E',
 ];
