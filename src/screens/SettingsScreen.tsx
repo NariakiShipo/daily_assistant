@@ -13,7 +13,7 @@ import { useApp } from '../store/AppContext';
 import { colors, radius, spacing, userColorChoices } from '../theme';
 import { Button, Card, SectionTitle } from '../components/ui';
 import { sendTestNotification } from '../services/notifications';
-import { useGoogleAuth, signOutGoogle } from '../services/googleAuth';
+import { signOutGoogle } from '../services/googleAuth';
 import { authErrorMessage, signInEmail, signOutUser, signUpEmail } from '../services/auth';
 import { useGoogleLogin } from '../services/googleLogin';
 import { confirmDialog, notify } from '../utils/dialog';
@@ -54,11 +54,6 @@ const SettingsScreen: React.FC = () => {
       setAuthBusy(false);
     }
   };
-
-  const google = useGoogleAuth((ok) => {
-    setGoogleConnected(ok);
-    notify(ok ? '已連接 Google' : '連接失敗', ok ? '行程可自動同步到 Google 日曆了。' : '請確認 config.ts 的用戶端 ID 與平台設定。');
-  });
 
   const googleLogin = useGoogleLogin((ok, error, calendarConnected) => {
     if (ok) {
@@ -168,7 +163,10 @@ const SettingsScreen: React.FC = () => {
               variant="outline"
               onPress={() => {
                 void signOutUser();
-                notify('已登出', '資料保留在本機,仍會以下方配對碼模式繼續同步。');
+                // Google 日曆連接綁定帳號登入,登出時一併中斷
+                void signOutGoogle();
+                setGoogleConnected(false);
+                notify('已登出', 'Google 日曆連接已一併中斷。資料保留在本機,仍會以下方配對碼模式繼續同步。');
               }}
             />
           </>
@@ -214,6 +212,9 @@ const SettingsScreen: React.FC = () => {
               onPress={() => void googleLogin.signIn()}
               disabled={!googleLogin.ready || googleLogin.busy}
             />
+            <Text style={[s.hint, { marginTop: spacing.xs }]}>
+              使用 Google 登入會一併連接 Google 日曆,不需另外授權。
+            </Text>
           </>
         )}
       </Card>
@@ -263,17 +264,31 @@ const SettingsScreen: React.FC = () => {
         </Text>
         {!data.settings.googleConnected ? (
           <>
-            {google.configured ? (
-              <Button
-                label={google.busy ? '連接中…' : '使用 Google 帳號登入'}
-                onPress={() => void google.signIn()}
-                disabled={!google.ready || google.busy}
-              />
+            {firebaseAvailable ? (
+              <>
+                <Text style={s.hint}>
+                  日曆連接已綁定上方「帳號」的 Google 登入:用 Google 登入時會一併連接。
+                  {authUser ? '若尚未連接或授權已過期,點下方按鈕重新授權即可。' : ''}
+                </Text>
+                <Button
+                  label={
+                    googleLogin.busy
+                      ? '處理中…'
+                      : authUser
+                        ? '重新 Google 登入並連接日曆'
+                        : '使用 Google 登入並連接日曆'
+                  }
+                  onPress={() => void googleLogin.signIn()}
+                  disabled={!googleLogin.ready || googleLogin.busy}
+                />
+                {!googleLogin.ready && (
+                  <Text style={s.hint}>
+                    手機版需在 .env 設定 Google OAuth 用戶端 ID(見 BUILD.md),網頁版不需要。
+                  </Text>
+                )}
+              </>
             ) : (
-              <Text style={s.hint}>
-                尚未設定 OAuth 用戶端 ID。請依 README 步驟到 Google Cloud Console 申請,
-                填入 src/config.ts 後此處會出現登入按鈕。
-              </Text>
+              <Text style={s.hint}>尚未設定 Firebase,無法使用 Google 登入連接日曆。</Text>
             )}
             <Text style={[s.hint, { marginTop: spacing.md }]}>開發測試:手動貼 Access Token</Text>
             <TextInput

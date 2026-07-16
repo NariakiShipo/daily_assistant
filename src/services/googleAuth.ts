@@ -1,20 +1,14 @@
 /**
- * Google OAuth(expo-auth-session)
+ * Google 日曆 token 儲存與刷新
  *
- * - Web:implicit flow,直接拿 access token(1 小時,過期需重新登入)
- * - iOS / Android(development build):code + PKCE,自動換取
- *   access token + refresh token,過期自動刷新
- * - Expo Go:Google 不接受 Expo Go 的 redirect,請改用 development build
- *   或在設定頁貼上測試 token
+ * 日曆授權已綁定「帳號」的 Google 登入(見 googleLogin.ts / auth.ts):
+ * 登入時一併取得 access token 存到這裡。
+ * 這個模組負責儲存、過期檢查與(有 refresh token 時)自動刷新。
  */
-import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import * as AuthSession from 'expo-auth-session';
-import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { googleOAuth, isGoogleConfigured } from '../config';
-
-WebBrowser.maybeCompleteAuthSession();
+import { googleOAuth } from '../config';
 
 const discovery: AuthSession.DiscoveryDocument = {
   authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -23,7 +17,6 @@ const discovery: AuthSession.DiscoveryDocument = {
 };
 
 const TOKEN_KEY = 'daily-assistant:google-tokens:v1';
-const SCOPES = ['https://www.googleapis.com/auth/calendar'];
 
 interface StoredTokens {
   accessToken: string;
@@ -97,74 +90,4 @@ export async function signOutGoogle(): Promise<void> {
       /* ignore */
     }
   }
-}
-
-/**
- * Google 登入 hook(在設定頁使用)
- * onResult(true) = 登入成功且 token 已儲存
- */
-export function useGoogleAuth(onResult: (ok: boolean) => void) {
-  const isWeb = Platform.OS === 'web';
-  const clientId = clientIdForPlatform();
-  const redirectUri = AuthSession.makeRedirectUri({ scheme: 'dailyassistant' });
-  const [busy, setBusy] = useState(false);
-
-  const [request, response, promptAsync] = AuthSession.useAuthRequest(
-    {
-      clientId: clientId || 'not-configured',
-      scopes: SCOPES,
-      redirectUri,
-      responseType: isWeb ? AuthSession.ResponseType.Token : AuthSession.ResponseType.Code,
-      usePKCE: !isWeb,
-      extraParams: isWeb ? {} : { access_type: 'offline', prompt: 'consent' },
-    },
-    discovery
-  );
-
-  useEffect(() => {
-    if (!response) return;
-    void (async () => {
-      if (response.type !== 'success') {
-        if (response.type === 'error') onResult(false);
-        return;
-      }
-      setBusy(true);
-      try {
-        if (isWeb) {
-          const auth = response.authentication;
-          if (auth?.accessToken) {
-            await saveTokens(auth.accessToken, auth.expiresIn);
-            onResult(true);
-          } else onResult(false);
-        } else {
-          const code = response.params.code;
-          const tr = await AuthSession.exchangeCodeAsync(
-            {
-              clientId,
-              code,
-              redirectUri,
-              extraParams: request?.codeVerifier
-                ? { code_verifier: request.codeVerifier }
-                : undefined,
-            },
-            discovery
-          );
-          await saveTokens(tr.accessToken, tr.expiresIn, tr.refreshToken);
-          onResult(true);
-        }
-      } catch {
-        onResult(false);
-      } finally {
-        setBusy(false);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [response]);
-
-  return {
-    configured: isGoogleConfigured(),
-    ready: !!request,
-    busy,
-    signIn: () => promptAsync(),
-  };
 }
