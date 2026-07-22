@@ -45,6 +45,13 @@ export interface AuthUser {
   email: string | null;
 }
 
+/** 目前登入的使用者(未登入為 null) */
+export function getCurrentUser(): AuthUser | null {
+  const a = getAuthInstance();
+  const u = a?.currentUser;
+  return u ? { uid: u.uid, email: u.email } : null;
+}
+
 /** 訂閱登入狀態,回傳取消訂閱函式 */
 export function onAuthChanged(cb: (u: AuthUser | null) => void): () => void {
   const a = getAuthInstance();

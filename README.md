@@ -51,10 +51,36 @@ npm run web        # 瀏覽器執行(通知功能僅手機支援)
 5. 把三組用戶端 ID 填入 `.env` 的 `EXPO_PUBLIC_GOOGLE_*`(範本見 `.env.example`)
 6. `npx expo start -c` 重啟 → 設定頁出現「使用 Google 帳號登入」按鈕
 
+### 永久連接(伺服器代管 refresh token)
+
+Google 登入順手拿到的日曆 token 約 1 小時就過期。要讓連線**永久有效**,需部署
+Firebase Functions 後端(`functions/`):設定頁的「🔗 永久連接 Google 日曆」會走
+authorization code + PKCE,由 Functions 用 client secret 換取 refresh token 並存到
+Firestore `googleTokens/{uid}`(規則擋死前端存取),之後 access token 過期會自動向後端續期。
+
+一次性部署步驟:
+
+1. Firebase 專案升級 **Blaze 方案**(Functions 需要;有免費額度,輕量使用近乎 $0)
+2. 在 Google Cloud Console 的 **Web OAuth 用戶端**:
+   - 「已授權的重新導向 URI」需包含正式站網址(如 `https://xxx.web.app`)與 `http://localhost:8081`
+   - 複製「用戶端密碼」(client secret)
+3. 設定 secret(互動式輸入,貼上 client secret):
+   ```bash
+   npx firebase functions:secrets:set GOOGLE_CLIENT_SECRET
+   ```
+4. `functions/.env` 需含 `GOOGLE_CLIENT_ID=<Web 用戶端 ID>`(非機密;已由 .env 產生)
+5. 部署:
+   ```bash
+   npm --prefix functions install
+   npx firebase deploy --only functions
+   ```
+
+手機版不需要另外操作:登入同一帳號後,token 過期會自動沿用伺服器代管的授權。
+
 注意:
 - **Expo Go 無法跑 Google OAuth**(Google 不接受其 redirect)。手機請用
   development build(`npx expo run:ios` / `run:android`),或先用 `npm run web` 測試
-- Web 為 implicit flow,token 1 小時後需重新登入;iOS/Android 有 refresh token 會自動續期
+- 未部署 Functions 時退回舊行為:登入順手連接的 token 約 1 小時過期,需重新授權
 - 共同編輯同個日曆:`createSharedCalendar()` 建共用日曆 → `shareCalendarWith(對方email)` 加為編輯者
 - 快速測試也可在 [OAuth Playground](https://developers.google.com/oauthplayground) 取 token 貼到設定頁
 

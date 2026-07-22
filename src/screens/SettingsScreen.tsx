@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  Platform,
   ScrollView,
   Share,
   StyleSheet,
@@ -13,9 +14,11 @@ import { useApp } from '../store/AppContext';
 import { colors, radius, spacing, userColorChoices } from '../theme';
 import { Button, Card, SectionTitle } from '../components/ui';
 import { sendTestNotification } from '../services/notifications';
-import { signOutGoogle } from '../services/googleAuth';
+import { isServerManaged, signOutGoogle } from '../services/googleAuth';
 import { authErrorMessage, signInEmail, signOutUser, signUpEmail } from '../services/auth';
 import { useGoogleLogin } from '../services/googleLogin';
+import { useCalendarConnect } from '../services/calendarConnect';
+import { disconnectServerCalendar } from '../services/calendarBackend';
 import { confirmDialog, notify } from '../utils/dialog';
 
 const SettingsScreen: React.FC = () => {
@@ -61,7 +64,7 @@ const SettingsScreen: React.FC = () => {
       notify(
         'Google 登入成功',
         calendarConnected
-          ? '已同時連接 Google 日曆,資料會自動上傳雲端並同步。'
+          ? '已同時連接 Google 日曆(暫時)。建議再點「永久連接」,授權就不會定時過期。'
           : '本機資料會自動上傳雲端並開始同步。'
       );
     } else {
@@ -69,10 +72,31 @@ const SettingsScreen: React.FC = () => {
     }
   });
 
+  /** 是否為伺服器代管的永久連接(顯示用;連接狀態變動時重查) */
+  const [permanent, setPermanent] = useState(false);
+  useEffect(() => {
+    void isServerManaged().then(setPermanent);
+  }, [data.settings.googleConnected]);
+
+  const calConnect = useCalendarConnect((ok, error) => {
+    if (ok) {
+      setGoogleConnected(true);
+      setPermanent(true);
+      notify('已永久連接 Google 日曆', '授權由伺服器自動續期,不會再定時斷線。');
+    } else {
+      notify(
+        '永久連接失敗',
+        error instanceof Error ? error.message : String(error ?? '請再試一次。')
+      );
+    }
+  }, authUser?.email ?? undefined);
+
   const disconnectGoogle = () => {
+    void disconnectServerCalendar(); // 解除伺服器代管(登出帳號不會走到這裡)
     void signOutGoogle();
     setGoogleToken(null);
     setToken('');
+    setPermanent(false);
   };
 
   const onCreateSpace = async () => {
@@ -260,24 +284,54 @@ const SettingsScreen: React.FC = () => {
       <Card>
         <SectionTitle>Google Calendar</SectionTitle>
         <Text style={s.hint}>
-          狀態:{data.settings.googleConnected ? '✅ 已連接' : '尚未連接'}
+          狀態:
+          {data.settings.googleConnected
+            ? permanent
+              ? '✅ 已連接(永久,授權自動續期)'
+              : '🕐 已連接(暫時,約 1 小時後過期)'
+            : '尚未連接'}
         </Text>
+
+        {/* 永久連接:refresh token 由伺服器代管,不再一小時斷線 */}
+        {firebaseAvailable &&
+          authUser &&
+          calConnect.ready &&
+          !(data.settings.googleConnected && permanent) && (
+            <>
+              <Button
+                label={calConnect.busy ? '連接中…' : '🔗 永久連接 Google 日曆'}
+                onPress={calConnect.connect}
+                disabled={calConnect.busy}
+              />
+              <Text style={s.hint}>
+                授權一次後由伺服器自動續期,不會再定時斷線(需已部署 Functions,見 README)。
+              </Text>
+            </>
+          )}
+        {firebaseAvailable && authUser && !calConnect.ready && Platform.OS !== 'web' && (
+          <Text style={s.hint}>
+            永久連接請在網頁版操作一次;手機登入同一帳號後會自動沿用伺服器授權。
+          </Text>
+        )}
+
         {!data.settings.googleConnected ? (
           <>
             {firebaseAvailable ? (
               <>
-                <Text style={s.hint}>
-                  日曆連接已綁定上方「帳號」的 Google 登入:用 Google 登入時會一併連接。
-                  {authUser ? '若尚未連接或授權已過期,點下方按鈕重新授權即可。' : ''}
-                </Text>
+                {!authUser && (
+                  <Text style={s.hint}>
+                    請先登入帳號(可用下方按鈕以 Google 登入),再回來點「永久連接」。
+                  </Text>
+                )}
                 <Button
                   label={
                     googleLogin.busy
                       ? '處理中…'
                       : authUser
-                        ? '重新 Google 登入並連接日曆'
+                        ? '重新 Google 登入(暫時連接日曆)'
                         : '使用 Google 登入並連接日曆'
                   }
+                  variant={authUser ? 'outline' : 'primary'}
                   onPress={() => void googleLogin.signIn()}
                   disabled={!googleLogin.ready || googleLogin.busy}
                 />
