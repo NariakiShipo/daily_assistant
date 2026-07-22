@@ -12,6 +12,8 @@
  * 1. Firebase 專案升級 Blaze 方案(Functions 需要)
  * 2. `firebase functions:secrets:set GOOGLE_CLIENT_SECRET`(貼 Web OAuth 用戶端的 secret)
  * 3. functions/.env 內含 GOOGLE_CLIENT_ID(Web OAuth 用戶端 ID,非機密)
+ *
+ * 執行環境 Node 22(Node 20 於 2026-10-30 停用)。
  */
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { defineSecret, defineString } = require('firebase-functions/params');
