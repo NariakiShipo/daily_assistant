@@ -6,6 +6,10 @@ import { formatMonthZh, fromDateKey, monthGrid, todayKey, weekdayZh } from '../u
 export interface DayMark {
   bg?: string;
   border?: string;
+  /** 日期數字顏色(例如深色底配白字) */
+  textColor?: string;
+  /** 日期數字加粗 */
+  textBold?: boolean;
 }
 
 interface Props {
@@ -91,6 +95,8 @@ const MiniCalendar: React.FC<Props> = ({
                   s.cellDay,
                   isToday && s.todayText,
                   !!maxDate && key > maxDate && s.dimText,
+                  !!mark?.textColor && { color: mark.textColor },
+                  mark?.textBold && { fontWeight: '900' },
                 ]}
               >
                 {Number(key.slice(8))}

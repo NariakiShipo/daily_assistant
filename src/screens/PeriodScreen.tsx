@@ -8,7 +8,7 @@ import {
 } from 'react-native';
 import { useApp } from '../store/AppContext';
 import { PeriodRecord } from '../types';
-import { colors, spacing } from '../theme';
+import { colors, radius, spacing, tagColor } from '../theme';
 import { addDays, daysBetween, formatDateZh, isValidDateKey, isWithin, todayKey, uid } from '../utils/date';
 import { confirmDialog, notify } from '../utils/dialog';
 import { phaseNameZh } from '../services/periodPrediction';
@@ -24,6 +24,8 @@ const PeriodScreen: React.FC = () => {
 
   const today = todayKey();
   const [recordDate, setRecordDate] = useState(today);
+  /** 展開「補記其他日期」的日曆;預設收合、直接記今天 */
+  const [backfill, setBackfill] = useState(false);
   const [editing, setEditing] = useState<PeriodRecord | null>(null);
   // 記錄當下的自訂欄位(預設帶出記住的欄位範本)
   const [recordFields, setRecordFields] = useState<FieldRow[]>(() =>
@@ -148,15 +150,19 @@ const PeriodScreen: React.FC = () => {
               key={prediction.nextStart}
               initialMonth={prediction.nextStart}
               getMark={(key) => {
+                // 最可能開始日:實心主色、白色粗體日期(取代原本的框線方框)
                 if (key === prediction.nextStart)
-                  return { bg: colors.periodDay, border: colors.primary };
+                  return { bg: colors.primary, textColor: '#fff', textBold: true };
+                // 歷史紀錄的經期日也顯示在這份日曆(往前翻月份可對照)
+                if (periodDays.has(key)) return { bg: colors.periodDay };
                 if (key === prediction.ovulationDate) return { bg: colors.ovulation };
                 if (isWithin(key, prediction.windowStart, prediction.windowEnd))
                   return { bg: colors.predictedDay };
                 return undefined;
               }}
               legend={[
-                { color: colors.periodDay, label: '最可能開始日' },
+                { color: colors.primary, label: '最可能開始日' },
+                { color: colors.periodDay, label: '已記錄經期' },
                 { color: colors.predictedDay, label: '可能區間' },
                 { color: colors.ovulation, label: '排卵日' },
               ]}
@@ -180,19 +186,34 @@ const PeriodScreen: React.FC = () => {
             />
           ))}
         </View>
-        <Text style={s.label}>點選日曆選擇記錄日期(粉色為已記錄的經期日)</Text>
-        <MiniCalendar
-          selected={recordDate}
-          onSelect={setRecordDate}
-          maxDate={today}
-          getMark={(key) =>
-            periodDays.has(key) ? { bg: colors.periodDay } : undefined
-          }
-        />
-        {recordDate !== today && (
-          <View style={{ flexDirection: 'row', marginTop: spacing.sm }}>
-            <Chip label="回到今天" onPress={() => setRecordDate(today)} />
-          </View>
+        {/* 純按鈕記錄:預設記今天;要補記過去日期才展開日曆 */}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+          <Chip
+            label="📅 補記其他日期"
+            active={backfill}
+            onPress={() => {
+              if (backfill) setRecordDate(today); // 收合時回到今天
+              setBackfill(!backfill);
+            }}
+          />
+          {backfill && recordDate !== today && (
+            <Chip label="回到今天" color={colors.textMuted} onPress={() => setRecordDate(today)} />
+          )}
+        </View>
+        {backfill && (
+          <>
+            <Text style={[s.label, { marginTop: spacing.xs }]}>
+              點選日曆選擇記錄日期(粉色為已記錄的經期日)
+            </Text>
+            <MiniCalendar
+              selected={recordDate}
+              onSelect={setRecordDate}
+              maxDate={today}
+              getMark={(key) =>
+                periodDays.has(key) ? { bg: colors.periodDay } : undefined
+              }
+            />
+          </>
         )}
         {!ongoing && (
           <>
@@ -204,12 +225,12 @@ const PeriodScreen: React.FC = () => {
         )}
         {!ongoing ? (
           <Button
-            label={`記錄經期開始(${isValidDateKey(recordDate) ? formatDateZh(recordDate) : recordDate})`}
+            label={`🩸 記錄經期開始(${recordDate === today ? '今天' : formatDateZh(recordDate)})`}
             onPress={startPeriod}
           />
         ) : (
           <Button
-            label={`記錄經期結束(${isValidDateKey(recordDate) ? formatDateZh(recordDate) : recordDate})`}
+            label={`✅ 記錄經期結束(${recordDate === today ? '今天' : formatDateZh(recordDate)})`}
             onPress={endPeriod}
           />
         )}
@@ -254,9 +275,12 @@ const PeriodScreen: React.FC = () => {
                 : ' – 進行中'}
             </Text>
             {p.customFields?.map((f) => (
-              <Text key={f.name} style={s.historyField}>
-                · {f.name}:{f.value}
-              </Text>
+              <View key={f.name} style={s.historyFieldRow}>
+                <View style={[s.fieldBadge, { backgroundColor: tagColor(f.name) }]}>
+                  <Text style={s.fieldBadgeText}>{f.name}</Text>
+                </View>
+                <Text style={s.historyField}>{f.value}</Text>
+              </View>
             ))}
             <Text style={s.historyMeta}>由 {recorderName(p.recordedBy)} 記錄(點一下編輯,長按刪除)</Text>
           </Card>
@@ -281,7 +305,15 @@ const s = StyleSheet.create({
   disclaimer: { fontSize: 11, color: colors.textMuted, marginTop: spacing.md, fontStyle: 'italic' },
   empty: { color: colors.textMuted, fontSize: 13 },
   historyMain: { fontSize: 14, fontWeight: '600', color: colors.text },
-  historyField: { fontSize: 13, color: colors.text, marginTop: 3 },
+  historyFieldRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  fieldBadge: {
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    marginRight: 6,
+  },
+  fieldBadgeText: { fontSize: 11, color: '#fff', fontWeight: '700' },
+  historyField: { fontSize: 13, color: colors.text },
   historyMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
 });
 

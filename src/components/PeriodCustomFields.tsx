@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { PeriodCustomField } from '../types';
-import { colors, radius, spacing } from '../theme';
+import { colors, radius, spacing, tagColor } from '../theme';
 import { notify } from '../utils/dialog';
 import { useApp } from '../store/AppContext';
 
@@ -64,8 +64,10 @@ const PeriodCustomFields: React.FC<Props> = ({ fields, onChange }) => {
     <View>
       {fields.map((f) => (
         <View key={f.name} style={s.fieldRow}>
+          {/* 每個欄位依名稱穩定配色,方便一眼區隔 */}
+          <View style={[s.fieldBar, { backgroundColor: tagColor(f.name) }]} />
           <View style={{ flex: 1 }}>
-            <Text style={s.fieldName}>{f.name}</Text>
+            <Text style={[s.fieldName, { color: tagColor(f.name) }]}>{f.name}</Text>
             <TextInput
               style={s.input}
               value={f.value}
@@ -115,6 +117,7 @@ const s = StyleSheet.create({
     color: colors.text,
   },
   fieldRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: spacing.sm },
+  fieldBar: { width: 4, alignSelf: 'stretch', borderRadius: 2, marginRight: spacing.sm },
   fieldName: { fontSize: 12, color: colors.text, fontWeight: '600', marginBottom: 4 },
   fieldRemove: {
     width: 32,
