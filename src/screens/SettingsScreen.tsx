@@ -139,7 +139,7 @@ const SettingsScreen: React.FC = () => {
 
   const shareCode = () => {
     if (data.settings.spaceId) {
-      void Share.share({ message: `Daily Assistant 配對碼:${data.settings.spaceId}` });
+      void Share.share({ message: `Daily Bear 配對碼:${data.settings.spaceId}` });
     }
   };
 

@@ -30,12 +30,13 @@ export function buildBackup(data: AppData, now: Date = new Date()): string {
   return JSON.stringify(file, null, 2);
 }
 
-/** 建議的檔名,例如 daily-assistant-2026-07-28.json */
+/**
+ * 建議的檔名,例如 daily-bear-2026-07-28.json。
+ * 只影響新匯出的檔案;parseBackup 不看檔名,舊的 daily-assistant-*.json 照樣能還原。
+ */
 export function backupFileName(now: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `daily-assistant-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
-    now.getDate()
-  )}.json`;
+  return `daily-bear-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.json`;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>

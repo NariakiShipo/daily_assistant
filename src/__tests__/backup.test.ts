@@ -50,7 +50,7 @@ test('備份可以原樣還原', () => {
 });
 
 test('backupFileName 帶上日期', () => {
-  assert.equal(backupFileName(new Date(2026, 6, 5)), 'daily-assistant-2026-07-05.json');
+  assert.equal(backupFileName(new Date(2026, 6, 5)), 'daily-bear-2026-07-05.json');
 });
 
 test('拒絕不是 JSON 的內容', () => {

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Daily Assistant",
+    "name": "Daily Bear",
     "slug": "daily-assistant",
     "scheme": "dailyassistant",
     "version": "1.0.0",
@@ -35,9 +35,9 @@
     "web": {
       "bundler": "metro",
       "favicon": "./assets/icon.png",
-      "name": "Daily Assistant",
-      "shortName": "Daily Assistant",
-      "description": "Your personal daily assistant app",
+      "name": "Daily Bear",
+      "shortName": "Daily Bear",
+      "description": "兩人共用的日曆、經期紀錄與課表",
       "themeColor": "#E8638C",
       "backgroundColor": "#FDF2F4"
     },

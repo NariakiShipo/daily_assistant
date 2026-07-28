@@ -28,7 +28,7 @@ export async function saveBackup(content: string, fileName: string): Promise<voi
 
   const path = `${FileSystem.cacheDirectory}${fileName}`;
   await FileSystem.writeAsStringAsync(path, content);
-  await Share.share({ url: path, message: `Daily Assistant 備份:${fileName}` });
+  await Share.share({ url: path, message: `Daily Bear 備份:${fileName}` });
 }
 
 /** 匯入:讓使用者選檔並讀出內容;取消時回傳 null */

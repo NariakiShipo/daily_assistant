@@ -1,4 +1,4 @@
-# Daily Assistant
+# Daily Bear
 
 伴侶/家人共用的生活助理 App(React Native + Expo,支援 iOS / Android / Web)。
 
