@@ -26,7 +26,7 @@
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#E8638C"
+        "backgroundColor": "#FFFFFF"
       },
       "permissions": [
         "RECEIVE_BOOT_COMPLETED",
