@@ -19,6 +19,7 @@ export const defaultData: AppData = {
     spaceId: null,
     customTags: [],
     periodFieldNames: [],
+    customSymptoms: [],
   },
 };
 

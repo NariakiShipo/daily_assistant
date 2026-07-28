@@ -41,12 +41,30 @@ const headers = (token: string) => ({
   'Content-Type': 'application/json',
 });
 
-const toGoogleEvent = (ev: CalendarEvent) => ({
-  summary: ev.title,
-  description: ev.notes ?? '',
-  start: { dateTime: `${ev.date}T${ev.startTime}:00`, timeZone: 'Asia/Taipei' },
-  end: { dateTime: `${ev.endDate ?? ev.date}T${ev.endTime}:00`, timeZone: 'Asia/Taipei' },
-});
+/** 'YYYY-MM-DD' 加一天(整天事件的 end.date 是排他的) */
+const nextDay = (key: string): string => {
+  const d = new Date(`${key}T00:00:00`);
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+};
+
+const toGoogleEvent = (ev: CalendarEvent) => {
+  // 整天事項要用 date 而非 dateTime,否則 Google 會顯示成 00:00–23:59 的長條
+  if (ev.allDay) {
+    return {
+      summary: ev.title,
+      description: ev.notes ?? '',
+      start: { date: ev.date },
+      end: { date: nextDay(ev.endDate ?? ev.date) }, // end.date 為排他,需 +1 天
+    };
+  }
+  return {
+    summary: ev.title,
+    description: ev.notes ?? '',
+    start: { dateTime: `${ev.date}T${ev.startTime}:00`, timeZone: 'Asia/Taipei' },
+    end: { dateTime: `${ev.endDate ?? ev.date}T${ev.endTime}:00`, timeZone: 'Asia/Taipei' },
+  };
+};
 
 /** 推送事件至 Google Calendar,回傳 googleEventId(無 token 時回傳 null) */
 export async function pushEvent(ev: CalendarEvent): Promise<string | null> {

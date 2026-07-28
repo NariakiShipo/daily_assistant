@@ -12,14 +12,24 @@ import {
 } from 'react-native';
 import { useApp } from '../store/AppContext';
 import { colors, radius, spacing, userColorChoices } from '../theme';
-import { Button, Card, SectionTitle } from '../components/ui';
-import { sendTestNotification } from '../services/notifications';
+import { Button, Card, Chip, SectionTitle } from '../components/ui';
+
+/** 上課提醒的可選提前時間 */
+const COURSE_REMIND_OPTIONS = [
+  { value: 10, label: '10 分鐘前' },
+  { value: 20, label: '20 分鐘前' },
+  { value: 30, label: '30 分鐘前' },
+];
+import { isWebNotifications, sendTestNotification } from '../services/notifications';
 import { isServerManaged, signOutGoogle } from '../services/googleAuth';
 import { authErrorMessage, signInEmail, signOutUser, signUpEmail } from '../services/auth';
 import { useGoogleLogin } from '../services/googleLogin';
 import { useCalendarConnect } from '../services/calendarConnect';
 import { disconnectServerCalendar } from '../services/calendarBackend';
+import { getSpaceMembers, lockSpace, unlockSpace } from '../services/firebaseSync';
 import { confirmDialog, notify } from '../utils/dialog';
+import { backupFileName, buildBackup, parseBackup } from '../services/backup';
+import { pickBackup, saveBackup } from '../services/backupFile';
 
 const SettingsScreen: React.FC = () => {
   const {
@@ -29,6 +39,8 @@ const SettingsScreen: React.FC = () => {
     authUser,
     updateUser,
     setNotificationsEnabled,
+    setCourseRemindMinutes,
+    restoreData,
     setGoogleToken,
     setGoogleConnected,
     createSharedSpace,
@@ -128,6 +140,74 @@ const SettingsScreen: React.FC = () => {
   const shareCode = () => {
     if (data.settings.spaceId) {
       void Share.share({ message: `Daily Assistant 配對碼:${data.settings.spaceId}` });
+    }
+  };
+
+  /** 空間是否已鎖定為帳號存取(null = 尚未查到) */
+  const [locked, setLocked] = useState<boolean | null>(null);
+  const spaceId = data.settings.spaceId ?? null;
+  useEffect(() => {
+    if (!shared || !spaceId) return setLocked(null);
+    void getSpaceMembers(spaceId).then((m) => setLocked(m !== null && m.length > 0));
+  }, [shared, spaceId]);
+
+  const toggleLock = async (lock: boolean) => {
+    if (!spaceId || !authUser) return;
+    const run = async () => {
+      setWorking(true);
+      try {
+        if (lock) await lockSpace(spaceId, authUser.uid);
+        else await unlockSpace(spaceId);
+        setLocked(lock);
+        notify(
+          lock ? '已鎖定' : '已解除鎖定',
+          lock
+            ? '現在只有名單內的登入帳號能存取這個空間。'
+            : '知道配對碼的裝置又可以存取了。'
+        );
+      } catch (e) {
+        notify('操作失敗', e instanceof Error ? e.message : String(e));
+      } finally {
+        setWorking(false);
+      }
+    };
+
+    if (!lock) return void run();
+    confirmDialog(
+      '鎖定為帳號存取',
+      '沒有登入帳號的裝置會立刻失去存取權,包含對方的手機。\n\n' +
+        '請先確認對方已登入帳號。之後可以隨時解除鎖定。\n\n確定要鎖定嗎?',
+      () => void run(),
+      { confirmLabel: '鎖定', destructive: true }
+    );
+  };
+
+  const doExport = async () => {
+    try {
+      await saveBackup(buildBackup(data), backupFileName());
+      notify('已匯出備份', '請把檔案存到雲端硬碟或其他安全的地方。');
+    } catch (e) {
+      notify('匯出失敗', e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const doImport = async () => {
+    try {
+      const json = await pickBackup();
+      if (json === null) return; // 使用者取消
+      const result = parseBackup(json);
+      if (!result.ok || !result.data) return notify('無法讀取備份', result.message);
+      const next = result.data;
+      confirmDialog(
+        '從備份還原',
+        `目前的資料會被備份的內容取代:\n${result.message}\n\n這個動作無法復原,確定嗎?`,
+        () => {
+          void restoreData(next).then(() => notify('已還原', result.message));
+        },
+        { confirmLabel: '還原', destructive: true }
+      );
+    } catch (e) {
+      notify('匯入失敗', e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -256,6 +336,48 @@ const SettingsScreen: React.FC = () => {
             <Text style={s.codeLabel}>配對碼</Text>
             <Text style={s.code}>{data.settings.spaceId}</Text>
             <Button label="分享配對碼給對方" onPress={shareCode} />
+
+            {/* 存取模式:預設是「知道配對碼就能進」,可改為帳號白名單 */}
+            <Text style={[s.hint, { marginTop: spacing.md }]}>
+              存取方式:
+              {locked === null
+                ? '確認中…'
+                : locked
+                  ? '🔒 已鎖定(只有名單內的登入帳號能存取)'
+                  : '🔑 知道配對碼即可存取'}
+            </Text>
+            {authUser ? (
+              locked ? (
+                <>
+                  <Button
+                    label="解除鎖定(改回配對碼存取)"
+                    variant="outline"
+                    onPress={() => void toggleLock(false)}
+                    disabled={working}
+                  />
+                  <Text style={s.hint}>
+                    對方也要登入帳號才能存取。若對方無法同步,請他登入後把他的帳號加入,
+                    或先解除鎖定。
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Button
+                    label="🔒 鎖定為帳號存取"
+                    variant="outline"
+                    onPress={() => void toggleLock(true)}
+                    disabled={working}
+                  />
+                  <Text style={s.warnHint}>
+                    ⚠️ 鎖定後配對碼就不再是通行證,**沒有登入帳號的裝置會立刻失去存取權**
+                    (包含對方的手機)。請確認雙方都已登入同一組或各自的帳號再鎖定。
+                  </Text>
+                </>
+              )
+            ) : (
+              <Text style={s.hint}>登入帳號後可把這個空間鎖定為只有指定帳號能存取。</Text>
+            )}
+
             <Button label="離開共享空間" variant="outline" onPress={leaveSharedSpace} />
             <Text style={s.hint}>離開後資料保留在本機,不會刪除雲端資料。</Text>
           </>
@@ -383,8 +505,34 @@ const SettingsScreen: React.FC = () => {
         </View>
         <Text style={s.hint}>
           啟用後:經期前 {data.settings.remindDaysBefore} 天與預測開始日會收到提醒;
+          行程若有設定提醒也會在開始前通知;
           {shared ? '對方' : '共同日曆'}修改行程時也會通知。
         </Text>
+        {isWebNotifications() && (
+          <Text style={s.warnHint}>
+            ⚠️ 網頁版的通知只在這個分頁開著時有效,關掉分頁就不會響。
+            要在鎖屏也收到提醒,請使用手機版 App。
+          </Text>
+        )}
+        <Text style={[s.hint, { marginTop: spacing.sm, marginBottom: spacing.xs }]}>
+          上課提醒(課表有課才會排;再點一下可關閉)
+        </Text>
+        <View style={s.chipRow}>
+          {COURSE_REMIND_OPTIONS.map((o) => (
+            <Chip
+              key={o.value}
+              label={o.label}
+              color={colors.accent}
+              active={data.settings.courseRemindMinutes === o.value}
+              onPress={() =>
+                setCourseRemindMinutes(
+                  data.settings.courseRemindMinutes === o.value ? null : o.value
+                )
+              }
+            />
+          ))}
+        </View>
+
         <Button label="發送測試通知" variant="outline" onPress={() => void sendTestNotification()} />
       </Card>
 
@@ -396,6 +544,13 @@ const SettingsScreen: React.FC = () => {
             ? '資料即時同步至 Firebase,本機保留快取。'
             : '資料目前儲存在本機。設定 Firebase 並配對後即可跨裝置共享。'}
         </Text>
+
+        <Text style={s.hint}>
+          雲端同步只是另一份即時副本,不算備份——匯出一份 JSON 自己留著比較保險。
+        </Text>
+        <Button label="⬆ 匯出備份" variant="outline" onPress={() => void doExport()} />
+        <Button label="⬇ 從備份還原" variant="outline" onPress={() => void doImport()} />
+
         <Button label="清除所有資料" variant="danger" onPress={confirmReset} />
       </Card>
     </ScrollView>
@@ -404,6 +559,8 @@ const SettingsScreen: React.FC = () => {
 
 const s = StyleSheet.create({
   hint: { fontSize: 12, color: colors.textMuted, marginBottom: spacing.sm, lineHeight: 18 },
+  warnHint: { fontSize: 12, color: colors.warning, marginBottom: spacing.sm, lineHeight: 18 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap' },
   userRow: { marginBottom: spacing.md },
   nameInput: {
     backgroundColor: colors.background,

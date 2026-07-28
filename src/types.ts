@@ -16,10 +16,15 @@ export interface CalendarEvent {
   date: string;
   /** YYYY-MM-DD 結束日期(跨日行程用;單日行程不設) */
   endDate?: string;
-  /** HH:mm */
+  /** HH:mm(allDay 為 true 時不具意義,但仍保留以相容舊資料與排序) */
   startTime: string;
-  /** HH:mm */
+  /** HH:mm(同上) */
   endTime: string;
+  /**
+   * 整天 / 無特定時間的事項(繳學費、買禮物⋯)。
+   * 這類事項不該被硬塞一個時段,也不參與課表衝突判斷。
+   */
+  allDay?: boolean;
   /** 此事件屬於誰(向後相容:等於 ownerIds 的第一位) */
   ownerId: string;
   /** 此事件屬於哪些人(可複選;未設時視同 [ownerId]) */
@@ -34,7 +39,63 @@ export interface CalendarEvent {
   tags?: string[];
   /** 優先順序(未設定 = 一般) */
   priority?: EventPriority;
+  /** 重複規則(未設 = 只發生一次) */
+  recurrence?: Recurrence;
+  /** 開始前幾分鐘提醒(0 = 準時;未設 = 不提醒) */
+  remindMinutesBefore?: number;
+  /**
+   * 重複行程中已完成的日期(YYYY-MM-DD)。
+   * 非重複行程的完成狀態沿用 tags 裡的「完成」;重複行程必須逐次獨立,
+   * 否則勾一次就等於整個系列都完成了。
+   */
+  doneDates?: string[];
 }
+
+/** 重複頻率 */
+export type RecurrenceFreq = 'daily' | 'weekly' | 'biweekly' | 'monthly';
+
+/**
+ * 重複規則。
+ *
+ * 儲存的 CalendarEvent 只有「第一次發生」那一筆,其餘由 expandEvents() 依規則展開,
+ * 不會在資料庫裡產生大量副本。
+ */
+export interface Recurrence {
+  freq: RecurrenceFreq;
+  /** 重複到哪一天為止(YYYY-MM-DD);未設 = 無限期 */
+  until?: string;
+  /** 已被單獨刪除的日期(YYYY-MM-DD),展開時跳過 */
+  exceptions?: string[];
+}
+
+export const RECURRENCE_LABELS: Record<RecurrenceFreq, string> = {
+  daily: '每天',
+  weekly: '每週',
+  biweekly: '每兩週',
+  monthly: '每月',
+};
+
+export const RECURRENCE_OPTIONS = (
+  ['daily', 'weekly', 'biweekly', 'monthly'] as RecurrenceFreq[]
+).map((value) => ({ value, label: RECURRENCE_LABELS[value] }));
+
+/** 行程提醒的可選提前時間(分鐘) */
+export const REMIND_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: '準時' },
+  { value: 10, label: '10 分鐘前' },
+  { value: 30, label: '30 分鐘前' },
+  { value: 60, label: '1 小時前' },
+  { value: 1440, label: '前一天' },
+];
+
+/** 提醒時間的顯示文字(含未列在選項中的自訂分鐘數) */
+export const remindLabel = (mins: number): string => {
+  const preset = REMIND_OPTIONS.find((o) => o.value === mins);
+  if (preset) return preset.label;
+  if (mins % 1440 === 0) return `${mins / 1440} 天前`;
+  if (mins % 60 === 0) return `${mins / 60} 小時前`;
+  return `${mins} 分鐘前`;
+};
 
 /** 行程優先順序 */
 export type EventPriority = 'high' | 'medium' | 'low';
@@ -104,6 +165,34 @@ export const semesterOrder = (id: string): number => {
 
 export type FlowLevel = 'light' | 'medium' | 'heavy';
 
+/** 經血量顯示文字 */
+export const FLOW_LABELS: Record<FlowLevel, string> = {
+  light: '少量',
+  medium: '中等',
+  heavy: '大量',
+};
+
+export const FLOW_OPTIONS = (['light', 'medium', 'heavy'] as FlowLevel[]).map((value) => ({
+  value,
+  label: FLOW_LABELS[value],
+}));
+
+/** 預設可選症狀(可複選;使用者也能自己加) */
+export const PERIOD_SYMPTOMS = [
+  '經痛',
+  '頭痛',
+  '腰痠',
+  '乳房脹痛',
+  '情緒低落',
+  '易怒',
+  '疲倦',
+  '水腫',
+  '失眠',
+  '食慾增加',
+  '長痘痘',
+  '噁心',
+] as const;
+
 /** 自訂欄位的一筆紀錄值(自描述,跟著紀錄一起同步) */
 export interface PeriodCustomField {
   /** 欄位名稱,例如「經前痛持續時間」 */
@@ -157,6 +246,10 @@ export interface AppSettings {
   customTags?: string[];
   /** 記住的經期自訂欄位名稱(新紀錄會自動帶出這些欄位) */
   periodFieldNames?: string[];
+  /** 使用者自訂的症狀(加進預設症狀清單) */
+  customSymptoms?: string[];
+  /** 上課前幾分鐘提醒(未設 / null = 不提醒) */
+  courseRemindMinutes?: number | null;
 }
 
 export interface AppData {

@@ -7,6 +7,7 @@ import { PERIOD_SLOTS, UNSCHEDULED_WEEKDAY, WEEKDAYS } from '../constants/timeta
 import { todayKey } from '../utils/date';
 import { notify } from '../utils/dialog';
 import { Card, Chip } from '../components/ui';
+import TodayCourseCard from '../components/TodayCourseCard';
 import CourseModal from '../components/CourseModal';
 import ImportCourseModal, { ImportResult } from '../components/ImportCourseModal';
 import ConflictResolveModal from '../components/ConflictResolveModal';
@@ -188,6 +189,14 @@ const TimetableScreen: React.FC = () => {
           )}
         </View>
       )}
+
+      {/* 今天:上課中 / 下一堂 + 當天課表 */}
+      <TodayCourseCard
+        courses={data.courses}
+        semesters={data.semesters}
+        ownerId={owner}
+        ownerName={data.users.find((u) => u.id === owner)?.name ?? ''}
+      />
 
       {/* 本學期統計 */}
       {(stats.count > 0 || semMeta) && (

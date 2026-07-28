@@ -11,7 +11,16 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { CalendarEvent, EVENT_TAGS, EventPriority, PRIORITY_OPTIONS } from '../types';
+import {
+  CalendarEvent,
+  EVENT_TAGS,
+  EventPriority,
+  PRIORITY_OPTIONS,
+  RECURRENCE_LABELS,
+  RECURRENCE_OPTIONS,
+  REMIND_OPTIONS,
+  RecurrenceFreq,
+} from '../types';
 import { colors, priorityColors, radius, spacing, tagColor } from '../theme';
 import {
   formatDateZh,
@@ -24,6 +33,7 @@ import {
 import { confirmDialog, notify } from '../utils/dialog';
 import { useApp } from '../store/AppContext';
 import { findEventClashes } from '../services/conflicts';
+import { EventInstance, excludeOccurrence, findSeries, isInstance } from '../services/recurrence';
 import { Button, Chip } from './ui';
 import MiniCalendar from './MiniCalendar';
 import TimeField from './TimeField';
@@ -31,8 +41,8 @@ import TimeField from './TimeField';
 interface Props {
   visible: boolean;
   onClose: () => void;
-  /** 編輯既有事件時傳入;新增時為 null */
-  event: CalendarEvent | null;
+  /** 編輯既有事件時傳入(可能是重複行程展開出的實例);新增時為 null */
+  event: EventInstance | null;
   /** 新增時的預設日期 */
   defaultDate: string;
 }
@@ -43,7 +53,8 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
   const [title, setTitle] = useState('');
   const [date, setDate] = useState(defaultDate);
   const [endDate, setEndDate] = useState(''); // 空字串 = 單日行程
-  const [dateMode, setDateMode] = useState<'start' | 'end'>('start');
+  /** 日曆目前在挑哪個日期:開始日 / 跨日行程的結束日 / 重複的結束日 */
+  const [dateMode, setDateMode] = useState<'start' | 'end' | 'until'>('start');
   const [startTime, setStartTime] = useState('09:00');
   const [endTime, setEndTime] = useState('10:00');
   const [ownerIds, setOwnerIds] = useState<string[]>([data.users[0]?.id ?? 'u1']);
@@ -52,6 +63,17 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
   const [tags, setTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState('');
   const [syncToGoogle, setSyncToGoogle] = useState(false);
+  const [freq, setFreq] = useState<RecurrenceFreq | null>(null);
+  const [until, setUntil] = useState(''); // 空字串 = 無限期重複
+  const [remind, setRemind] = useState<number | null>(null); // null = 不提醒
+  const [allDay, setAllDay] = useState(false);
+
+  /**
+   * 傳進來的可能是展開出的實例;編輯一律針對原始行程(整個系列),
+   * 只有「刪除這一次」才會用到 event.date 這個單次日期。
+   */
+  const series = event ? (findSeries(data.events, event) ?? event) : null;
+  const editingOccurrence = !!event && isInstance(event);
 
   const toggleTag = (t: string) =>
     setTags((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
@@ -91,17 +113,21 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
   useEffect(() => {
     if (!visible) return;
     setDateMode('start');
-    if (event) {
-      setTitle(event.title);
-      setDate(event.date);
-      setEndDate(event.endDate ?? '');
-      setStartTime(event.startTime);
-      setEndTime(event.endTime);
-      setOwnerIds(event.ownerIds?.length ? event.ownerIds : [event.ownerId]);
-      setNotes(event.notes ?? '');
-      setPriority(event.priority ?? null);
-      setTags(event.tags ?? []);
-      setSyncToGoogle(!!event.syncToGoogle);
+    if (series) {
+      setTitle(series.title);
+      setDate(series.date);
+      setEndDate(series.endDate ?? '');
+      setStartTime(series.startTime);
+      setEndTime(series.endTime);
+      setOwnerIds(series.ownerIds?.length ? series.ownerIds : [series.ownerId]);
+      setNotes(series.notes ?? '');
+      setPriority(series.priority ?? null);
+      setTags(series.tags ?? []);
+      setSyncToGoogle(!!series.syncToGoogle);
+      setFreq(series.recurrence?.freq ?? null);
+      setUntil(series.recurrence?.until ?? '');
+      setRemind(series.remindMinutesBefore ?? null);
+      setAllDay(!!series.allDay);
     } else {
       setTitle('');
       setDate(defaultDate);
@@ -114,7 +140,13 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       setTags([]);
       setNewTag('');
       setSyncToGoogle(false);
+      setFreq(null);
+      setUntil('');
+      setRemind(null);
+      setAllDay(false);
     }
+    // series 由 event 推導,依 event 變動即可
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, event, defaultDate, data.users]);
 
   const isMultiDay = !!endDate && endDate !== date;
@@ -131,6 +163,12 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
     setOwnerIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
 
   const pickDate = (key: string) => {
+    if (dateMode === 'until') {
+      if (key < date) {
+        return notify('重複結束日不能早於開始日', `目前開始日為 ${formatDateZh(date)}。`);
+      }
+      return setUntil(key);
+    }
     if (dateMode === 'start') {
       if (endDate && key > endDate) {
         return notify('開始日期不能晚於結束日期', `目前結束日為 ${formatDateZh(endDate)}。`);
@@ -146,31 +184,51 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
 
   const save = async () => {
     if (!title.trim()) return notify('請輸入標題');
-    if (!isValidTime(startTime) || !isValidTime(endTime))
-      return notify('時間格式錯誤', '請用 HH:MM(24 小時制)');
-    // 跨日行程允許結束時刻早於開始時刻(因為在不同天)
-    if (!isMultiDay && endTime <= startTime) return notify('結束時間需晚於開始時間');
+    if (!allDay) {
+      if (!isValidTime(startTime) || !isValidTime(endTime))
+        return notify('時間格式錯誤', '請用 HH:MM(24 小時制)');
+      // 跨日行程允許結束時刻早於開始時刻(因為在不同天)
+      if (!isMultiDay && endTime <= startTime) return notify('結束時間需晚於開始時間');
+    }
     if (ownerIds.length === 0) return notify('請至少選擇一位成員');
 
+    if (until && until < date) {
+      return notify('重複結束日不能早於開始日', `目前開始日為 ${formatDateZh(date)}。`);
+    }
+
     const ev: CalendarEvent = {
-      id: event?.id ?? uid(),
+      id: series?.id ?? uid(),
       title: title.trim(),
       date,
       endDate: isMultiDay ? endDate : undefined,
-      startTime,
-      endTime,
+      // 整天事項固定存 00:00–23:59:排序時自然排在當天最前面,舊資料格式也不變
+      startTime: allDay ? '00:00' : startTime,
+      endTime: allDay ? '23:59' : endTime,
+      allDay: allDay || undefined,
       ownerId: ownerIds[0],
       ownerIds,
-      createdBy: event?.createdBy ?? data.users[0]?.id ?? 'u1',
+      createdBy: series?.createdBy ?? data.users[0]?.id ?? 'u1',
       notes: notes.trim() || undefined,
       priority: priority ?? undefined,
       tags: tags.length ? tags : undefined,
       syncToGoogle,
-      googleEventId: event?.googleEventId,
+      googleEventId: series?.googleEventId,
+      recurrence: freq
+        ? {
+            freq,
+            until: until || undefined,
+            // 沿用既有的單次例外;改頻率時清掉(舊日期對新頻率沒有意義)
+            exceptions:
+              series?.recurrence?.freq === freq ? series.recurrence.exceptions : undefined,
+          }
+        : undefined,
+      // 取消重複時,逐次完成狀態一併作廢
+      doneDates: freq ? series?.doneDates : undefined,
+      remindMinutesBefore: remind ?? undefined,
     };
 
     const persist = async () => {
-      if (event) await updateEvent(ev);
+      if (series) await updateEvent(ev);
       else await addEvent(ev);
       onClose();
     };
@@ -198,15 +256,32 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
     await persist();
   };
 
+  /** 刪除整個行程(重複行程 = 所有次數) */
   const remove = () => {
-    if (!event) return;
+    if (!series) return;
     confirmDialog(
-      '刪除行程',
-      `確定刪除「${event.title}」?`,
+      series.recurrence ? '刪除整個重複行程' : '刪除行程',
+      series.recurrence
+        ? `「${series.title}」的所有重複都會被刪除,確定嗎?`
+        : `確定刪除「${series.title}」?`,
       () => {
-        void deleteEvent(event.id).then(onClose);
+        void deleteEvent(series.id).then(onClose);
       },
       { confirmLabel: '刪除', destructive: true }
+    );
+  };
+
+  /** 只跳過重複行程的這一次(其餘照常發生) */
+  const removeThisOccurrence = () => {
+    if (!series || !event) return;
+    confirmDialog(
+      '只刪除這一次',
+      `${formatDateZh(event.date)} 的「${series.title}」會被跳過,其他日期不受影響。`,
+      () => {
+        const updated = excludeOccurrence(series, event.date);
+        if (updated) void updateEvent(updated).then(onClose);
+      },
+      { confirmLabel: '跳過這次', destructive: true }
     );
   };
 
@@ -218,7 +293,9 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       >
         <View style={s.sheet}>
           <View style={s.header}>
-            <Text style={s.headerTitle}>{event ? '編輯行程' : '新增行程'}</Text>
+            <Text style={s.headerTitle}>
+              {series ? (series.recurrence ? '編輯重複行程' : '編輯行程') : '新增行程'}
+            </Text>
             <TouchableOpacity onPress={onClose}>
               <Text style={s.close}>✕</Text>
             </TouchableOpacity>
@@ -250,25 +327,42 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
               )}
             </View>
             <MiniCalendar
-              selected={dateMode === 'start' ? date : endDate || null}
+              selected={
+                dateMode === 'start' ? date : dateMode === 'until' ? until || null : endDate || null
+              }
               onSelect={pickDate}
               getMark={(key) => {
                 if (key === date) return { bg: colors.primarySoft, border: colors.primary };
+                if (key === until) return { bg: colors.accentSoft, border: colors.accent };
                 if (endDate && isWithin(key, date, endDate)) return { bg: colors.primarySoft };
                 return undefined;
               }}
             />
 
-            <View style={s.row}>
-              <View style={s.half}>
-                <Text style={s.label}>開始時間</Text>
-                <TimeField value={startTime} onChange={changeStartTime} />
-              </View>
-              <View style={s.half}>
-                <Text style={s.label}>結束時間</Text>
-                <TimeField value={endTime} onChange={setEndTime} />
-              </View>
+            <View style={s.switchRow}>
+              <Text style={s.label}>整天 / 無特定時間</Text>
+              <Switch
+                value={allDay}
+                onValueChange={setAllDay}
+                trackColor={{ true: colors.primary }}
+              />
             </View>
+            {allDay ? (
+              <Text style={s.hint}>
+                📌 這是「繳學費」「買生日禮物」這類沒有時段的事情,不會與課表衝突。
+              </Text>
+            ) : (
+              <View style={s.row}>
+                <View style={s.half}>
+                  <Text style={s.label}>開始時間</Text>
+                  <TimeField value={startTime} onChange={changeStartTime} />
+                </View>
+                <View style={s.half}>
+                  <Text style={s.label}>結束時間</Text>
+                  <TimeField value={endTime} onChange={setEndTime} />
+                </View>
+              </View>
+            )}
 
             <Text style={s.label}>這是誰的行程?(可複選)</Text>
             <View style={s.chips}>
@@ -282,6 +376,56 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
                 />
               ))}
             </View>
+
+            <Text style={s.label}>重複(再點一下可取消)</Text>
+            <View style={s.chips}>
+              {RECURRENCE_OPTIONS.map((r) => (
+                <Chip
+                  key={r.value}
+                  label={r.label}
+                  color={colors.accent}
+                  active={freq === r.value}
+                  onPress={() => setFreq(freq === r.value ? null : r.value)}
+                />
+              ))}
+            </View>
+            {freq && (
+              <>
+                <Text style={s.hint}>
+                  🔁 從 {formatDateZh(date)} 起{RECURRENCE_LABELS[freq]}重複
+                  {until ? `,至 ${formatDateZh(until)} 止` : '(無限期)'}
+                  {freq === 'monthly' ? '。沒有該日期的月份會自動跳過。' : ''}
+                </Text>
+                <View style={s.chips}>
+                  <Chip
+                    label={until ? `結束於 ${formatDateZh(until)}` : '設定結束日期'}
+                    active={dateMode === 'until'}
+                    onPress={() => setDateMode(dateMode === 'until' ? 'start' : 'until')}
+                  />
+                  {!!until && (
+                    <Chip label="改為無限期" color={colors.textMuted} onPress={() => setUntil('')} />
+                  )}
+                </View>
+              </>
+            )}
+
+            <Text style={s.label}>提醒(再點一下可取消)</Text>
+            <View style={s.chips}>
+              {REMIND_OPTIONS.map((o) => (
+                <Chip
+                  key={o.value}
+                  label={o.label}
+                  color={colors.warning}
+                  active={remind === o.value}
+                  onPress={() => setRemind(remind === o.value ? null : o.value)}
+                />
+              ))}
+            </View>
+            {remind !== null && !data.settings.notificationsEnabled && (
+              <Text style={s.warn}>
+                ⚠️ 通知目前是關閉的,請到「設定」頁開啟才會收到提醒。
+              </Text>
+            )}
 
             <Text style={s.label}>優先順序(再點一下可取消)</Text>
             <View style={s.chips}>
@@ -345,8 +489,17 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
               />
             </View>
 
-            <Button label={event ? '儲存變更' : '新增行程'} onPress={() => void save()} />
-            {event && <Button label="刪除行程" variant="danger" onPress={remove} />}
+            <Button label={series ? '儲存變更' : '新增行程'} onPress={() => void save()} />
+            {editingOccurrence && series?.recurrence && (
+              <Button label="只刪除這一次" variant="outline" onPress={removeThisOccurrence} />
+            )}
+            {series && (
+              <Button
+                label={series.recurrence ? '刪除整個重複行程' : '刪除行程'}
+                variant="danger"
+                onPress={remove}
+              />
+            )}
             <View style={{ height: spacing.xl }} />
           </ScrollView>
         </View>
@@ -373,6 +526,8 @@ const s = StyleSheet.create({
   headerTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
   close: { fontSize: 18, color: colors.textMuted, padding: spacing.xs },
   label: { fontSize: 13, fontWeight: '600', color: colors.textMuted, marginBottom: 4, marginTop: spacing.sm },
+  hint: { fontSize: 12, color: colors.accent, marginTop: spacing.xs, lineHeight: 18 },
+  warn: { fontSize: 12, color: colors.warning, marginTop: spacing.xs, lineHeight: 18 },
   input: {
     backgroundColor: colors.card,
     borderWidth: 1,

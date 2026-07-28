@@ -73,6 +73,8 @@ export function findConflicts(
 
   const out: EventConflict[] = [];
   for (const ev of events) {
+    // 整天事項沒有具體時段,不該被判定成「和上課時間衝突」
+    if (ev.allDay) continue;
     if (!ownersOfEvent(ev).includes(ownerId)) continue;
     const lastDate = ev.endDate ?? ev.date;
     if (lastDate < semester.startDate || ev.date > semester.endDate) continue;
@@ -113,6 +115,7 @@ export function findEventClashes(
   courses: CourseEntry[],
   semesters: SemesterMeta[]
 ): EventClash[] {
+  if (ev.allDay) return []; // 整天事項不佔特定時段
   const semById = new Map(semesters.map((s) => [s.id, s]));
   const owners = new Set(ownersOfEvent(ev));
   const lastDate = ev.endDate ?? ev.date;

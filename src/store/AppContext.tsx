@@ -57,6 +57,12 @@ interface AppContextValue {
   // period custom fields (記住的欄位名稱)
   addPeriodFieldName: (name: string) => void;
   removePeriodFieldName: (name: string) => void;
+  /** 記住使用者自訂的症狀,之後記錄時可直接點選 */
+  addCustomSymptom: (name: string) => void;
+  /** 上課前幾分鐘提醒(null = 關閉) */
+  setCourseRemindMinutes: (mins: number | null) => void;
+  /** 以備份檔的內容取代目前資料(共享模式下一併上傳雲端) */
+  restoreData: (next: AppData) => Promise<void>;
   // users & settings
   updateUser: (u: UserProfile) => void;
   setNotificationsEnabled: (on: boolean) => Promise<void>;
@@ -184,6 +190,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       void notif.schedulePeriodReminders(prediction, data.settings.remindDaysBefore);
     }
   }, [prediction, data.settings.notificationsEnabled, data.settings.remindDaysBefore]);
+
+  // 行程或課表變動時整批重排提醒(重複行程的展開結果會隨時間推移,逐筆維護會漏)
+  const primaryUserId = data.users.find((u) => u.isPrimary)?.id ?? data.users[0]?.id;
+  useEffect(() => {
+    if (!loaded.current) return;
+    if (data.settings.notificationsEnabled) {
+      void notif.syncEventReminders({
+        events: data.events,
+        courses: data.courses,
+        semesters: data.semesters,
+        courseOwnerId: primaryUserId,
+        courseRemindMinutes: data.settings.courseRemindMinutes,
+      });
+    } else {
+      void notif.cancelEventReminders();
+    }
+  }, [
+    data.events,
+    data.courses,
+    data.semesters,
+    primaryUserId,
+    data.settings.notificationsEnabled,
+    data.settings.courseRemindMinutes,
+  ]);
 
   // 啟動時檢查 Google OAuth token 是否仍有效
   useEffect(() => {
@@ -364,6 +394,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   }, []);
 
+  const addCustomSymptom = useCallback((name: string) => {
+    setData((d) => {
+      const cur = d.settings.customSymptoms ?? [];
+      if (cur.includes(name)) return d;
+      return { ...d, settings: { ...d.settings, customSymptoms: [...cur, name] } };
+    });
+  }, []);
+
+  const setCourseRemindMinutes = useCallback((mins: number | null) => {
+    setData((d) => ({ ...d, settings: { ...d.settings, courseRemindMinutes: mins } }));
+  }, []);
+
   const updateUser = useCallback(
     (u: UserProfile) => {
       setData((d) => {
@@ -430,6 +472,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setData((d) => ({ ...d, settings: { ...d.settings, spaceId: null } }));
   }, []);
 
+  const restoreData = useCallback(
+    async (next: AppData) => {
+      // 保留目前的共享空間:備份不帶配對碼,匯入不該把裝置踢出空間
+      const keepSpaceId = dataRef.current.settings.spaceId ?? null;
+      const merged: AppData = {
+        ...next,
+        settings: { ...next.settings, spaceId: keepSpaceId },
+      };
+      setData(merged);
+      if (keepSpaceId && firebaseAvailable) {
+        await fb.uploadLocal(
+          keepSpaceId,
+          merged.events,
+          merged.periods,
+          merged.courses,
+          merged.semesters
+        );
+        await fb.saveUsers(keepSpaceId, merged.users);
+      }
+    },
+    [firebaseAvailable]
+  );
+
   const resetAll = useCallback(async () => {
     await clearData();
     await notif.cancelPeriodReminders();
@@ -459,6 +524,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     removeCustomTag,
     addPeriodFieldName,
     removePeriodFieldName,
+    addCustomSymptom,
+    setCourseRemindMinutes,
+    restoreData,
     updateUser,
     setNotificationsEnabled,
     setGoogleToken,

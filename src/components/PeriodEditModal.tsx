@@ -9,7 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { PeriodRecord } from '../types';
+import { FlowLevel, PeriodRecord } from '../types';
 import { colors, radius, spacing } from '../theme';
 import { formatDateZh, isWithin, todayKey } from '../utils/date';
 import { confirmDialog, notify } from '../utils/dialog';
@@ -17,6 +17,7 @@ import { useApp } from '../store/AppContext';
 import { Button, Chip } from './ui';
 import MiniCalendar from './MiniCalendar';
 import PeriodCustomFields, { FieldRow, buildFieldRows, toCustomFields } from './PeriodCustomFields';
+import PeriodSymptomFields from './PeriodSymptomFields';
 
 interface Props {
   visible: boolean;
@@ -25,12 +26,14 @@ interface Props {
 }
 
 const PeriodEditModal: React.FC<Props> = ({ visible, onClose, record }) => {
-  const { data, updatePeriod, deletePeriod } = useApp();
+  const { data, updatePeriod, deletePeriod, addCustomSymptom } = useApp();
 
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState(''); // 空字串 = 進行中
   const [mode, setMode] = useState<'start' | 'end'>('start');
   const [fields, setFields] = useState<FieldRow[]>([]);
+  const [flow, setFlow] = useState<FlowLevel | null>(null);
+  const [symptoms, setSymptoms] = useState<string[]>([]);
 
   useEffect(() => {
     if (!visible || !record) return;
@@ -39,6 +42,8 @@ const PeriodEditModal: React.FC<Props> = ({ visible, onClose, record }) => {
     setMode('start');
     // 欄位 = 記住的範本欄位 + 這筆紀錄自己有的欄位(填回既有值)
     setFields(buildFieldRows(data.settings.periodFieldNames ?? [], record.customFields));
+    setFlow(record.flow ?? null);
+    setSymptoms(record.symptoms ?? []);
     // data.settings.periodFieldNames 只在開啟時當初始範本,不需放進依賴
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, record]);
@@ -66,6 +71,8 @@ const PeriodEditModal: React.FC<Props> = ({ visible, onClose, record }) => {
       startDate,
       endDate: endDate || undefined,
       customFields: toCustomFields(fields),
+      flow: flow ?? undefined,
+      symptoms: symptoms.length ? symptoms : undefined,
     });
     onClose();
   };
@@ -133,6 +140,15 @@ const PeriodEditModal: React.FC<Props> = ({ visible, onClose, record }) => {
                 onPress={() => setEndDate('')}
               />
             )}
+
+            <PeriodSymptomFields
+              flow={flow}
+              onChangeFlow={setFlow}
+              symptoms={symptoms}
+              onChangeSymptoms={setSymptoms}
+              customSymptoms={data.settings.customSymptoms ?? []}
+              onAddCustomSymptom={addCustomSymptom}
+            />
 
             {/* 自訂欄位紀錄 */}
             <Text style={[s.label, { marginTop: spacing.md }]}>

@@ -61,6 +61,14 @@ export const minutesToTime = (mins: number): string => {
   return `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
 };
 
+/** 'YYYY-MM-DD' + 'HH:MM' → Date(本地時區) */
+export const atTime = (key: string, time: string): Date => {
+  const d = fromDateKey(key);
+  const [h, m] = time.split(':').map(Number);
+  d.setHours(h, m, 0, 0);
+  return d;
+};
+
 export const isValidDateKey = (k: string): boolean => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) return false;
   return toDateKey(fromDateKey(k)) === k;

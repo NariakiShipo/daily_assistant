@@ -7,19 +7,22 @@ import {
   View,
 } from 'react-native';
 import { useApp } from '../store/AppContext';
-import { PeriodRecord } from '../types';
+import { FLOW_LABELS, FlowLevel, PeriodRecord } from '../types';
 import { colors, radius, spacing, tagColor } from '../theme';
 import { addDays, daysBetween, formatDateZh, isValidDateKey, isWithin, todayKey, uid } from '../utils/date';
 import { confirmDialog, notify } from '../utils/dialog';
 import { phaseNameZh } from '../services/periodPrediction';
 import { recommendations } from '../services/recommendations';
+import { cycleLengths, symptomCounts } from '../services/periodStats';
 import { Button, Card, Chip, SectionTitle } from '../components/ui';
 import PeriodEditModal from '../components/PeriodEditModal';
 import MiniCalendar from '../components/MiniCalendar';
 import PeriodCustomFields, { FieldRow, buildFieldRows, toCustomFields } from '../components/PeriodCustomFields';
+import PeriodSymptomFields from '../components/PeriodSymptomFields';
 
 const PeriodScreen: React.FC = () => {
-  const { data, prediction, phase, addPeriod, updatePeriod, deletePeriod } = useApp();
+  const { data, prediction, phase, addPeriod, updatePeriod, deletePeriod, addCustomSymptom } =
+    useApp();
   const [recorder, setRecorder] = useState(data.users[0]?.id ?? 'u1');
 
   const today = todayKey();
@@ -31,6 +34,8 @@ const PeriodScreen: React.FC = () => {
   const [recordFields, setRecordFields] = useState<FieldRow[]>(() =>
     buildFieldRows(data.settings.periodFieldNames ?? [], [])
   );
+  const [recordFlow, setRecordFlow] = useState<FlowLevel | null>(null);
+  const [recordSymptoms, setRecordSymptoms] = useState<string[]>([]);
   const sorted = useMemo(
     () => [...data.periods].sort((a, b) => b.startDate.localeCompare(a.startDate)),
     [data.periods]
@@ -75,11 +80,15 @@ const PeriodScreen: React.FC = () => {
       startDate: recordDate,
       recordedBy: recorder,
       customFields: toCustomFields(recordFields),
+      flow: recordFlow ?? undefined,
+      symptoms: recordSymptoms.length ? recordSymptoms : undefined,
     };
     addPeriod(rec);
     notify('已記錄', `經期開始:${formatDateZh(recordDate)}(由 ${recorderName(recorder)} 記錄)`);
     // 重設為空白範本,供下次記錄使用
     setRecordFields(buildFieldRows(data.settings.periodFieldNames ?? [], []));
+    setRecordFlow(null);
+    setRecordSymptoms([]);
   };
 
   const endPeriod = () => {
@@ -103,6 +112,10 @@ const PeriodScreen: React.FC = () => {
 
   const rec = phase ? recommendations[phase.phase] : null;
   const daysToNext = prediction ? daysBetween(today, prediction.nextStart) : null;
+
+  const topSymptoms = useMemo(() => symptomCounts(data.periods).slice(0, 6), [data.periods]);
+  const cycles = useMemo(() => cycleLengths(data.periods).slice(-8), [data.periods]);
+  const maxCycle = useMemo(() => Math.max(...cycles.map((c) => c.days), 1), [cycles]);
 
   return (
     <ScrollView
@@ -217,6 +230,14 @@ const PeriodScreen: React.FC = () => {
         )}
         {!ongoing && (
           <>
+            <PeriodSymptomFields
+              flow={recordFlow}
+              onChangeFlow={setRecordFlow}
+              symptoms={recordSymptoms}
+              onChangeSymptoms={setRecordSymptoms}
+              customSymptoms={data.settings.customSymptoms ?? []}
+              onAddCustomSymptom={addCustomSymptom}
+            />
             <Text style={[s.label, { marginTop: spacing.md }]}>
               自訂紀錄(選填,例如:經前痛持續時間)
             </Text>
@@ -262,6 +283,41 @@ const PeriodScreen: React.FC = () => {
         </Card>
       )}
 
+      {/* 統計 */}
+      {(topSymptoms.length > 0 || cycles.length > 0) && (
+        <Card>
+          <SectionTitle>統計</SectionTitle>
+          {cycles.length > 0 && (
+            <>
+              <Text style={s.label}>近期週期長度(最近 {cycles.length} 次)</Text>
+              {cycles.map((c) => (
+                <View key={c.startDate} style={s.barRow}>
+                  <Text style={s.barLabel}>{formatDateZh(c.startDate)}</Text>
+                  <View style={s.barTrack}>
+                    <View style={[s.barFill, { width: `${(c.days / maxCycle) * 100}%` }]} />
+                  </View>
+                  <Text style={s.barValue}>{c.days} 天</Text>
+                </View>
+              ))}
+            </>
+          )}
+          {topSymptoms.length > 0 && (
+            <>
+              <Text style={[s.label, { marginTop: spacing.md }]}>最常記錄的症狀</Text>
+              <View style={s.badgeWrap}>
+                {topSymptoms.map((sym) => (
+                  <View key={sym.name} style={[s.fieldBadge, { backgroundColor: tagColor(sym.name) }]}>
+                    <Text style={s.fieldBadgeText}>
+                      {sym.name} ×{sym.count}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </>
+          )}
+        </Card>
+      )}
+
       {/* 歷史紀錄 */}
       <SectionTitle>歷史紀錄({sorted.length})</SectionTitle>
       {sorted.length === 0 && <Text style={s.empty}>尚無紀錄</Text>}
@@ -274,6 +330,20 @@ const PeriodScreen: React.FC = () => {
                 ? ` – ${formatDateZh(p.endDate)}(${daysBetween(p.startDate, p.endDate) + 1} 天)`
                 : ' – 進行中'}
             </Text>
+            {(p.flow || p.symptoms?.length) && (
+              <View style={s.badgeWrap}>
+                {p.flow && (
+                  <View style={[s.fieldBadge, { backgroundColor: colors.primary }]}>
+                    <Text style={s.fieldBadgeText}>經血量 {FLOW_LABELS[p.flow]}</Text>
+                  </View>
+                )}
+                {p.symptoms?.map((name) => (
+                  <View key={name} style={[s.fieldBadge, { backgroundColor: tagColor(name) }]}>
+                    <Text style={s.fieldBadgeText}>{name}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
             {p.customFields?.map((f) => (
               <View key={f.name} style={s.historyFieldRow}>
                 <View style={[s.fieldBadge, { backgroundColor: tagColor(f.name) }]}>
@@ -306,6 +376,19 @@ const s = StyleSheet.create({
   empty: { color: colors.textMuted, fontSize: 13 },
   historyMain: { fontSize: 14, fontWeight: '600', color: colors.text },
   historyFieldRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  badgeWrap: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 6, gap: 4 },
+  barRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6 },
+  barLabel: { fontSize: 11, color: colors.textMuted, width: 58 },
+  barTrack: {
+    flex: 1,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.primarySoft,
+    marginHorizontal: spacing.sm,
+    overflow: 'hidden',
+  },
+  barFill: { height: 10, borderRadius: 5, backgroundColor: colors.primary },
+  barValue: { fontSize: 11, color: colors.text, width: 42, textAlign: 'right' },
   fieldBadge: {
     borderRadius: radius.pill,
     paddingHorizontal: 8,

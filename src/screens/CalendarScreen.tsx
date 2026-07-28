@@ -3,11 +3,19 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { useApp } from '../store/AppContext';
-import { CalendarEvent, EVENT_TAGS, PRIORITY_LABELS, TAG_DONE } from '../types';
+import {
+  CalendarEvent,
+  EVENT_TAGS,
+  PRIORITY_LABELS,
+  RECURRENCE_LABELS,
+  TAG_DONE,
+  remindLabel,
+} from '../types';
 import { colors, priorityColors, radius, spacing, tagColor } from '../theme';
 import {
   formatDateZh,
@@ -23,12 +31,24 @@ import { PERIOD_SLOTS } from '../constants/timetable';
 import { Card, Chip, Dot, SectionTitle } from '../components/ui';
 import EventModal from '../components/EventModal';
 import DayPreview, { PreviewCourse } from '../components/DayPreview';
+import {
+  EventInstance,
+  expandEvents,
+  findSeries,
+  toggleOccurrenceDone,
+} from '../services/recurrence';
+import { TAG_UNDONE, filterEvents, ownersOf } from '../services/eventFilter';
 
-type ViewMode = 'time' | 'person';
+type ViewMode = 'time' | 'person' | 'agenda';
 
-/** 行程的所有擁有者(相容舊資料的單一 ownerId) */
-const ownersOf = (e: CalendarEvent): string[] =>
-  e.ownerIds?.length ? e.ownerIds : [e.ownerId];
+/** 未來 N 天檢視涵蓋的天數 */
+const AGENDA_DAYS = 7;
+
+const VIEW_MODES: { key: ViewMode; label: string }[] = [
+  { key: 'time', label: '依時間' },
+  { key: 'person', label: '依人' },
+  { key: 'agenda', label: `未來 ${AGENDA_DAYS} 天` },
+];
 
 const CalendarScreen: React.FC = () => {
   const { data, prediction, updateEvent } = useApp();
@@ -39,8 +59,9 @@ const CalendarScreen: React.FC = () => {
   const [filterUser, setFilterUser] = useState<string | null>(null); // null = 全部
   const [filterTag, setFilterTag] = useState<string | null>(null); // 標籤名或「未完成」
   const [viewMode, setViewMode] = useState<ViewMode>('time');
+  const [query, setQuery] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<CalendarEvent | null>(null);
+  const [editing, setEditing] = useState<EventInstance | null>(null);
   const [previewKey, setPreviewKey] = useState<string | null>(null);
 
   const cells = useMemo(() => monthGrid(year, month), [year, month]);
@@ -55,25 +76,43 @@ const CalendarScreen: React.FC = () => {
 
   const monthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`;
   const monthStart = `${monthPrefix}-01`;
-  const monthEnd = `${monthPrefix}-31`;
+  const monthEnd = `${monthPrefix}-${new Date(year, month + 1, 0).getDate()}`;
+  /** 本月要顯示的行程:重複行程已展開成一次次實例(expandEvents 內含排序) */
   const monthEvents = useMemo(
     () =>
-      data.events
-        // 跨日行程只要與本月有重疊就顯示
-        .filter((e) => e.date <= monthEnd && (e.endDate ?? e.date) >= monthStart)
-        .filter((e) => (filterUser ? ownersOf(e).includes(filterUser) : true))
-        .filter((e) => {
-          if (!filterTag) return true;
-          if (filterTag === '未完成') return !e.tags?.includes(TAG_DONE);
-          return !!e.tags?.includes(filterTag);
-        })
-        .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime)),
-    [data.events, monthStart, monthEnd, filterUser, filterTag]
+      filterEvents(expandEvents(data.events, monthStart, monthEnd), {
+        query,
+        ownerId: filterUser,
+        tag: filterTag,
+      }),
+    [data.events, monthStart, monthEnd, filterUser, filterTag, query]
   );
+
+  /** 未來 N 天的行程,依日期分組(與月份無關,永遠從今天算起) */
+  const agenda = useMemo(() => {
+    if (viewMode !== 'agenda') return [];
+    const start = today;
+    const end = addDays(today, AGENDA_DAYS - 1);
+    const list = filterEvents(expandEvents(data.events, start, end), {
+      query,
+      ownerId: filterUser,
+      tag: filterTag,
+    });
+    const days: { date: string; events: EventInstance[] }[] = [];
+    for (let i = 0; i < AGENDA_DAYS; i++) {
+      const key = addDays(start, i);
+      // 跨日行程在它涵蓋的每一天都要出現
+      const evs = list
+        .filter((e) => e.date <= key && (e.endDate ?? e.date) >= key)
+        .sort((a, b) => a.startTime.localeCompare(b.startTime));
+      days.push({ date: key, events: evs });
+    }
+    return days;
+  }, [viewMode, data.events, today, filterUser, filterTag, query]);
 
   /** 跨日行程展開到範圍內每一天(上限 62 天防呆),每天依開始時間排序 */
   const eventsByDate = useMemo(() => {
-    const map: Record<string, CalendarEvent[]> = {};
+    const map: Record<string, EventInstance[]> = {};
     for (const e of monthEvents) {
       const last = e.endDate ?? e.date;
       let d = e.date;
@@ -153,20 +192,29 @@ const CalendarScreen: React.FC = () => {
     } else setMonth(month + 1);
   };
 
-  /** 切換事件的「完成」標籤 */
-  const toggleDone = (ev: CalendarEvent) => {
-    const cur = ev.tags ?? [];
+  /**
+   * 切換完成狀態。重複行程要逐次獨立(記在原始行程的 doneDates),
+   * 否則勾一次就等於整個系列都完成了。
+   */
+  const toggleDone = (ev: EventInstance) => {
+    const series = findSeries(data.events, ev);
+    if (!series) return;
+    if (series.recurrence) {
+      void updateEvent(toggleOccurrenceDone(series, ev.date));
+      return;
+    }
+    const cur = series.tags ?? [];
     const tags = cur.includes(TAG_DONE)
       ? cur.filter((t) => t !== TAG_DONE)
       : [...cur, TAG_DONE];
-    void updateEvent({ ...ev, tags: tags.length ? tags : undefined });
+    void updateEvent({ ...series, tags: tags.length ? tags : undefined });
   };
 
   const openNew = () => {
     setEditing(null);
     setModalOpen(true);
   };
-  const openEdit = (ev: CalendarEvent) => {
+  const openEdit = (ev: EventInstance) => {
     setEditing(ev);
     setModalOpen(true);
   };
@@ -187,7 +235,24 @@ const CalendarScreen: React.FC = () => {
           </TouchableOpacity>
         </View>
 
-        {/* 篩選:全部 / 個人 + 檢視模式 */}
+        {/* 搜尋 */}
+        <View style={s.searchRow}>
+          <TextInput
+            style={s.searchInput}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="🔍 搜尋標題、備註、標籤"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+          />
+          {!!query && (
+            <TouchableOpacity style={s.clearBtn} onPress={() => setQuery('')}>
+              <Text style={s.clearBtnText}>✕</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* 篩選:全部 / 個人 */}
         <View style={s.filterRow}>
           <Chip label="全部" active={filterUser === null} onPress={() => setFilterUser(null)} />
           {data.users.map((u) => (
@@ -199,22 +264,30 @@ const CalendarScreen: React.FC = () => {
               onPress={() => setFilterUser(filterUser === u.id ? null : u.id)}
             />
           ))}
-          <View style={{ flex: 1 }} />
-          <Chip
-            label={viewMode === 'time' ? '⇄ 依人檢視' : '⇄ 依時間'}
-            color={colors.accent}
-            onPress={() => setViewMode(viewMode === 'time' ? 'person' : 'time')}
-          />
+        </View>
+
+        {/* 檢視模式 */}
+        <View style={s.filterRow}>
+          <Text style={s.filterLabel}>檢視:</Text>
+          {VIEW_MODES.map((m) => (
+            <Chip
+              key={m.key}
+              label={m.label}
+              color={colors.accent}
+              active={viewMode === m.key}
+              onPress={() => setViewMode(m.key)}
+            />
+          ))}
         </View>
 
         {/* 標籤篩選 */}
         <View style={s.filterRow}>
           <Text style={s.filterLabel}>標籤:</Text>
-          {[...allTags, '未完成'].map((t) => (
+          {[...allTags, TAG_UNDONE].map((t) => (
             <Chip
               key={t}
               label={t}
-              color={t === '未完成' ? colors.textMuted : tagColor(t)}
+              color={t === TAG_UNDONE ? colors.textMuted : tagColor(t)}
               active={filterTag === t}
               onPress={() => setFilterTag(filterTag === t ? null : t)}
             />
@@ -295,7 +368,35 @@ const CalendarScreen: React.FC = () => {
           </View>
         </Card>
 
-        {viewMode === 'time' ? (
+        {viewMode === 'agenda' ? (
+          /* 未來 N 天:每天一區,含空白日 */
+          <>
+            {agenda.map((d) => (
+              <View key={d.date} style={{ marginBottom: spacing.sm }}>
+                <SectionTitle>
+                  {d.date === today ? '今天' : formatDateZh(d.date)}(週
+                  {weekdayZh[fromDateKey(d.date).getDay()]}) · {d.events.length} 筆
+                </SectionTitle>
+                {d.events.length === 0 ? (
+                  <Text style={s.empty}>沒有行程</Text>
+                ) : (
+                  d.events.map((e) => (
+                    <EventRow
+                      key={e.id}
+                      ev={e}
+                      color={userOf(ownersOf(e)[0])?.color}
+                      ownerName={ownersOf(e)
+                        .map((id) => userOf(id)?.name ?? '?')
+                        .join('、')}
+                      onPress={() => openEdit(e)}
+                      onToggleDone={() => toggleDone(e)}
+                    />
+                  ))
+                )}
+              </View>
+            ))}
+          </>
+        ) : viewMode === 'time' ? (
           /* 依時間:選取日的行程 */
           <>
             <SectionTitle>
@@ -381,7 +482,7 @@ const CalendarScreen: React.FC = () => {
 };
 
 const EventRow: React.FC<{
-  ev: CalendarEvent;
+  ev: EventInstance;
   color?: string;
   ownerName?: string;
   showDate?: boolean;
@@ -413,8 +514,12 @@ const EventRow: React.FC<{
               {(showDate || ev.endDate)
                 ? `${formatDateZh(ev.date)}${ev.endDate ? ` → ${formatDateZh(ev.endDate)}` : ''}  `
                 : ''}
-              {ev.startTime} – {ev.endTime}
+              {ev.allDay ? '整天' : `${ev.startTime} – ${ev.endTime}`}
               {ownerName ? `  ·  ${ownerName}` : ''}
+              {ev.recurrence ? `  ·  🔁 ${RECURRENCE_LABELS[ev.recurrence.freq]}` : ''}
+              {ev.remindMinutesBefore !== undefined
+                ? `  ·  ⏰ ${remindLabel(ev.remindMinutesBefore)}`
+                : ''}
               {ev.googleEventId ? '  ·  已同步 G 日曆' : ev.syncToGoogle ? '  ·  待同步' : ''}
             </Text>
             {!!ev.notes && <Text style={s.eventNotes}>{ev.notes}</Text>}
@@ -458,6 +563,28 @@ const s = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.md,
   },
+  searchRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
+  searchInput: {
+    flex: 1,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 9,
+    fontSize: 14,
+    color: colors.text,
+  },
+  clearBtn: {
+    marginLeft: spacing.sm,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clearBtnText: { color: colors.primary, fontSize: 14, fontWeight: '700' },
   weekRow: { flexDirection: 'row' },
   weekday: {
     width: CELL,
