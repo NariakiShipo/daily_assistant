@@ -12,6 +12,7 @@
  */
 import { CalendarEvent } from '../types';
 import { getValidAccessToken } from './googleAuth';
+import { GoogleEvent } from './googleSync';
 
 const API = 'https://www.googleapis.com/calendar/v3';
 
@@ -41,12 +42,30 @@ const headers = (token: string) => ({
   'Content-Type': 'application/json',
 });
 
-const toGoogleEvent = (ev: CalendarEvent) => ({
-  summary: ev.title,
-  description: ev.notes ?? '',
-  start: { dateTime: `${ev.date}T${ev.startTime}:00`, timeZone: 'Asia/Taipei' },
-  end: { dateTime: `${ev.endDate ?? ev.date}T${ev.endTime}:00`, timeZone: 'Asia/Taipei' },
-});
+/** 'YYYY-MM-DD' 加一天(整天事件的 end.date 是排他的) */
+const nextDay = (key: string): string => {
+  const d = new Date(`${key}T00:00:00`);
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+};
+
+const toGoogleEvent = (ev: CalendarEvent) => {
+  // 整天事項要用 date 而非 dateTime,否則 Google 會顯示成 00:00–23:59 的長條
+  if (ev.allDay) {
+    return {
+      summary: ev.title,
+      description: ev.notes ?? '',
+      start: { date: ev.date },
+      end: { date: nextDay(ev.endDate ?? ev.date) }, // end.date 為排他,需 +1 天
+    };
+  }
+  return {
+    summary: ev.title,
+    description: ev.notes ?? '',
+    start: { dateTime: `${ev.date}T${ev.startTime}:00`, timeZone: 'Asia/Taipei' },
+    end: { dateTime: `${ev.endDate ?? ev.date}T${ev.endTime}:00`, timeZone: 'Asia/Taipei' },
+  };
+};
 
 /** 推送事件至 Google Calendar,回傳 googleEventId(無 token 時回傳 null) */
 export async function pushEvent(ev: CalendarEvent): Promise<string | null> {
@@ -63,6 +82,72 @@ export async function pushEvent(ev: CalendarEvent): Promise<string | null> {
   if (!res.ok) throw new Error(`Google Calendar 同步失敗:${res.status}`);
   const json = (await res.json()) as { id: string };
   return json.id;
+}
+
+/** 初次同步的時間範圍:往回一個月、往前半年 */
+const PULL_BACK_DAYS = 30;
+const PULL_FORWARD_DAYS = 180;
+/** 單次同步最多拉幾頁,防止異常情況下無限翻頁 */
+const MAX_PAGES = 10;
+
+export interface PullResult {
+  events: GoogleEvent[];
+  /** 下次增量同步用;Google 只在最後一頁給 */
+  nextSyncToken: string | null;
+  /** syncToken 過期,呼叫端需清掉並改做完整同步 */
+  tokenExpired: boolean;
+}
+
+const isoDaysFromNow = (days: number): string =>
+  new Date(Date.now() + days * 86400_000).toISOString();
+
+/**
+ * 從 Google 拉取事件。
+ *
+ * 有 syncToken 就走增量(只回傳上次之後的變動,含刪除);沒有則做一次範圍內的完整拉取。
+ * singleEvents=true 讓 Google 自己把重複行程展開成實例——理由見 googleSync.ts 檔頭。
+ */
+export async function pullEvents(syncToken?: string | null): Promise<PullResult> {
+  const token = await getToken();
+  if (!token) return { events: [], nextSyncToken: null, tokenExpired: false };
+
+  const events: GoogleEvent[] = [];
+  let pageToken: string | undefined;
+  let nextSyncToken: string | null = null;
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const params = new URLSearchParams({ singleEvents: 'true', maxResults: '250' });
+    if (syncToken) {
+      params.set('syncToken', syncToken);
+    } else {
+      // timeMin/timeMax 與 syncToken 互斥,只有完整同步時能帶
+      params.set('timeMin', isoDaysFromNow(-PULL_BACK_DAYS));
+      params.set('timeMax', isoDaysFromNow(PULL_FORWARD_DAYS));
+      params.set('orderBy', 'startTime');
+    }
+    if (pageToken) params.set('pageToken', pageToken);
+
+    const res = await fetch(
+      `${API}/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`,
+      { headers: headers(token) }
+    );
+
+    // 410 = syncToken 過期(Google 已清掉那段變更歷史),必須重做完整同步
+    if (res.status === 410) return { events: [], nextSyncToken: null, tokenExpired: true };
+    if (!res.ok) throw new Error(`讀取 Google 日曆失敗:${res.status}`);
+
+    const json = (await res.json()) as {
+      items?: GoogleEvent[];
+      nextPageToken?: string;
+      nextSyncToken?: string;
+    };
+    events.push(...(json.items ?? []));
+    nextSyncToken = json.nextSyncToken ?? null;
+    pageToken = json.nextPageToken;
+    if (!pageToken) break;
+  }
+
+  return { events, nextSyncToken, tokenExpired: false };
 }
 
 export async function deleteEvent(googleEventId: string): Promise<void> {

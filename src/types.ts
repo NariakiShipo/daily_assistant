@@ -16,16 +16,27 @@ export interface CalendarEvent {
   date: string;
   /** YYYY-MM-DD 結束日期(跨日行程用;單日行程不設) */
   endDate?: string;
-  /** HH:mm */
+  /** HH:mm(allDay 為 true 時不具意義,但仍保留以相容舊資料與排序) */
   startTime: string;
-  /** HH:mm */
+  /** HH:mm(同上) */
   endTime: string;
+  /**
+   * 整天 / 無特定時間的事項(繳學費、買禮物⋯)。
+   * 這類事項不該被硬塞一個時段,也不參與課表衝突判斷。
+   */
+  allDay?: boolean;
   /** 此事件屬於誰(向後相容:等於 ownerIds 的第一位) */
   ownerId: string;
   /** 此事件屬於哪些人(可複選;未設時視同 [ownerId]) */
   ownerIds?: string[];
   /** 由誰建立(共同編輯時可能不同) */
   createdBy: string;
+  /** 最後修改時間(epoch ms);用來偵測兩人同時編輯同一筆 */
+  updatedAt?: number;
+  /** 最後由誰修改 */
+  updatedBy?: string;
+  /** 最後由哪台裝置修改;伺服器推播時用來略過來源裝置,不推給自己 */
+  updatedByDevice?: string;
   /** 已同步至 Google Calendar 的事件 ID */
   googleEventId?: string;
   /** 是否要求同步至 Google Calendar */
@@ -34,7 +45,63 @@ export interface CalendarEvent {
   tags?: string[];
   /** 優先順序(未設定 = 一般) */
   priority?: EventPriority;
+  /** 重複規則(未設 = 只發生一次) */
+  recurrence?: Recurrence;
+  /** 開始前幾分鐘提醒(0 = 準時;未設 = 不提醒) */
+  remindMinutesBefore?: number;
+  /**
+   * 重複行程中已完成的日期(YYYY-MM-DD)。
+   * 非重複行程的完成狀態沿用 tags 裡的「完成」;重複行程必須逐次獨立,
+   * 否則勾一次就等於整個系列都完成了。
+   */
+  doneDates?: string[];
 }
+
+/** 重複頻率 */
+export type RecurrenceFreq = 'daily' | 'weekly' | 'biweekly' | 'monthly';
+
+/**
+ * 重複規則。
+ *
+ * 儲存的 CalendarEvent 只有「第一次發生」那一筆,其餘由 expandEvents() 依規則展開,
+ * 不會在資料庫裡產生大量副本。
+ */
+export interface Recurrence {
+  freq: RecurrenceFreq;
+  /** 重複到哪一天為止(YYYY-MM-DD);未設 = 無限期 */
+  until?: string;
+  /** 已被單獨刪除的日期(YYYY-MM-DD),展開時跳過 */
+  exceptions?: string[];
+}
+
+export const RECURRENCE_LABELS: Record<RecurrenceFreq, string> = {
+  daily: '每天',
+  weekly: '每週',
+  biweekly: '每兩週',
+  monthly: '每月',
+};
+
+export const RECURRENCE_OPTIONS = (
+  ['daily', 'weekly', 'biweekly', 'monthly'] as RecurrenceFreq[]
+).map((value) => ({ value, label: RECURRENCE_LABELS[value] }));
+
+/** 行程提醒的可選提前時間(分鐘) */
+export const REMIND_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: '準時' },
+  { value: 10, label: '10 分鐘前' },
+  { value: 30, label: '30 分鐘前' },
+  { value: 60, label: '1 小時前' },
+  { value: 1440, label: '前一天' },
+];
+
+/** 提醒時間的顯示文字(含未列在選項中的自訂分鐘數) */
+export const remindLabel = (mins: number): string => {
+  const preset = REMIND_OPTIONS.find((o) => o.value === mins);
+  if (preset) return preset.label;
+  if (mins % 1440 === 0) return `${mins / 1440} 天前`;
+  if (mins % 60 === 0) return `${mins / 60} 小時前`;
+  return `${mins} 分鐘前`;
+};
 
 /** 行程優先順序 */
 export type EventPriority = 'high' | 'medium' | 'low';
@@ -63,18 +130,74 @@ export interface CourseEntry {
   id: string;
   title: string;
   location?: string;
-  /** 1 = 週一 ⋯ 5 = 週五 */
+  /** 1 = 週一 ⋯ 5 = 週五;-1 = 無固定時段(UNSCHEDULED_WEEKDAY) */
   weekday: number;
-  /** 起始節次(PERIOD_SLOTS 索引) */
+  /** 起始節次(PERIOD_SLOTS 索引;無時段課固定為 0) */
   startPeriod: number;
   /** 結束節次(PERIOD_SLOTS 索引,>= startPeriod) */
   endPeriod: number;
   color?: string;
   /** 這是誰的課表 */
   ownerId: string;
+  /** 匯入來源:'ntut' = 北科課程好朋友;未設 = 手動建立 */
+  source?: 'ntut';
+  /** 所屬學期(SemesterMeta.id,例如 '115-1');未設 = 未分類(舊資料) */
+  semesterId?: string;
+  /** 北科課號(同門課的多個時段共用) */
+  ntutCourseId?: string;
+  /** 學分(統計用) */
+  credit?: number;
+  /** 授課教師 */
+  teacher?: string;
 }
 
+/** 學期:課表按學期分頁保存,起訖日用於行程衝突判斷 */
+export interface SemesterMeta {
+  /** '115-1' = 115 學年度第 1 學期 */
+  id: string;
+  /** YYYY-MM-DD 學期起日 */
+  startDate: string;
+  /** YYYY-MM-DD 學期迄日 */
+  endDate: string;
+  /** 匯入時的班級,例如「資工三」 */
+  className?: string;
+}
+
+/** 學期排序權重(新的在前) */
+export const semesterOrder = (id: string): number => {
+  const [y, s] = id.split('-').map(Number);
+  return (y || 0) * 10 + (s || 0);
+};
+
 export type FlowLevel = 'light' | 'medium' | 'heavy';
+
+/** 經血量顯示文字 */
+export const FLOW_LABELS: Record<FlowLevel, string> = {
+  light: '少量',
+  medium: '中等',
+  heavy: '大量',
+};
+
+export const FLOW_OPTIONS = (['light', 'medium', 'heavy'] as FlowLevel[]).map((value) => ({
+  value,
+  label: FLOW_LABELS[value],
+}));
+
+/** 預設可選症狀(可複選;使用者也能自己加) */
+export const PERIOD_SYMPTOMS = [
+  '經痛',
+  '頭痛',
+  '腰痠',
+  '乳房脹痛',
+  '情緒低落',
+  '易怒',
+  '疲倦',
+  '水腫',
+  '失眠',
+  '食慾增加',
+  '長痘痘',
+  '噁心',
+] as const;
 
 /** 自訂欄位的一筆紀錄值(自描述,跟著紀錄一起同步) */
 export interface PeriodCustomField {
@@ -129,6 +252,16 @@ export interface AppSettings {
   customTags?: string[];
   /** 記住的經期自訂欄位名稱(新紀錄會自動帶出這些欄位) */
   periodFieldNames?: string[];
+  /** 使用者自訂的症狀(加進預設症狀清單) */
+  customSymptoms?: string[];
+  /** 上課前幾分鐘提醒(未設 / null = 不提醒) */
+  courseRemindMinutes?: number | null;
+  /** 跨裝置推播:對方改動共用行程時,即使 App 沒開也通知 */
+  crossDevicePush?: boolean;
+  /** Google 日曆增量同步用的 token(由 Google 發放,過期會自動重做完整同步) */
+  googleSyncToken?: string | null;
+  /** 上次從 Google 拉取的時間(epoch ms),顯示用 */
+  googleLastPullAt?: number | null;
 }
 
 export interface AppData {
@@ -136,5 +269,7 @@ export interface AppData {
   events: CalendarEvent[];
   periods: PeriodRecord[];
   courses: CourseEntry[];
+  /** 已知的學期(匯入課表時建立) */
+  semesters: SemesterMeta[];
   settings: AppSettings;
 }

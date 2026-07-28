@@ -7,13 +7,25 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { AppData, CalendarEvent, CourseEntry, PeriodRecord, UserProfile, CyclePrediction } from '../types';
+import {
+  AppData,
+  CalendarEvent,
+  CourseEntry,
+  PeriodRecord,
+  SemesterMeta,
+  UserProfile,
+  CyclePrediction,
+  semesterOrder,
+} from '../types';
 import { defaultData, loadData, saveData, clearData } from '../services/storage';
 import { predictNextCycle, getCurrentPhase, PhaseInfo } from '../services/periodPrediction';
 import * as notif from '../services/notifications';
 import * as gcal from '../services/googleCalendar';
 import * as fb from '../services/firebaseSync';
+import { syncErrorMessage } from '../services/syncError';
 import * as auth from '../services/auth';
+import * as push from '../services/push';
+import { mergeGoogleEvents, syncSummary } from '../services/googleSync';
 import { isFirebaseConfigured } from '../config';
 
 interface AppContextValue {
@@ -33,17 +45,33 @@ interface AppContextValue {
   // periods
   addPeriod: (p: PeriodRecord) => void;
   updatePeriod: (p: PeriodRecord) => void;
-  deletePeriod: (id: string) => void;
+  /** 刪除經期紀錄;遠端刪除失敗會還原本機並拋出錯誤 */
+  deletePeriod: (id: string) => Promise<void>;
   // courses
   addCourse: (c: CourseEntry) => void;
   updateCourse: (c: CourseEntry) => void;
-  deleteCourse: (id: string) => void;
+  /** 刪除課程;遠端刪除失敗會還原本機並拋出錯誤 */
+  deleteCourse: (id: string) => Promise<void>;
+  /** 課表匯入:一次移除指定課程並寫入新課程(覆蓋邏輯由呼叫端決定) */
+  importCourses: (removeIds: string[], entries: CourseEntry[]) => void;
+  // semesters
+  upsertSemester: (meta: SemesterMeta) => void;
   // tags
   addCustomTag: (name: string) => void;
   removeCustomTag: (name: string) => void;
   // period custom fields (記住的欄位名稱)
   addPeriodFieldName: (name: string) => void;
   removePeriodFieldName: (name: string) => void;
+  /** 記住使用者自訂的症狀,之後記錄時可直接點選 */
+  addCustomSymptom: (name: string) => void;
+  /** 上課前幾分鐘提醒(null = 關閉) */
+  setCourseRemindMinutes: (mins: number | null) => void;
+  /** 跨裝置推播(對方改動時即使 App 沒開也通知);回傳是否成功啟用 */
+  setCrossDevicePush: (on: boolean) => Promise<boolean>;
+  /** 從 Google 日曆拉回變更並合併;回傳結果摘要 */
+  pullFromGoogle: () => Promise<string>;
+  /** 以備份檔的內容取代目前資料(共享模式下一併上傳雲端) */
+  restoreData: (next: AppData) => Promise<void>;
   // users & settings
   updateUser: (u: UserProfile) => void;
   setNotificationsEnabled: (on: boolean) => Promise<void>;
@@ -70,6 +98,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [authUser, setAuthUser] = useState<auth.AuthUser | null>(null);
   const loaded = useRef(false);
   const dataRef = useRef(data);
+  /** 這台裝置的識別碼(推播時用來略過自己);非同步取得,取得前為 undefined */
+  const deviceId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    void push.getDeviceId().then((id) => {
+      deviceId.current = id;
+    });
+  }, []);
   useEffect(() => {
     dataRef.current = data;
   });
@@ -111,6 +146,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       },
       onPeriods: (periods) => setData((d) => ({ ...d, periods })),
       onCourses: (courses) => setData((d) => ({ ...d, courses })),
+      onSemesters: (semesters) => setData((d) => ({ ...d, semesters })),
     });
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -139,8 +175,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           await fb.bindUserSpace(authUser.uid, sid);
         }
-        // 把本機資料合併上傳(id 不變,重複者覆蓋,不會弄丟雲端既有資料)
-        await fb.uploadLocal(sid, cur.events, cur.periods, cur.courses);
+        /*
+         * 只在「這台裝置還沒跟這個空間同步過」時把本機資料推上去。
+         *
+         * 先前是每次登入都無條件整批上傳,而 uploadLocal 只寫不刪——已經在雲端
+         * 刪掉的項目會被本機的舊快取重新寫回去,再由訂閱推回所有裝置,看起來就像
+         * 「刪掉的東西自己跑回來」。已經在同步的裝置應該以雲端為準。
+         */
+        if (cur.settings.spaceId !== sid) {
+          await fb.uploadLocal(sid, cur.events, cur.periods, cur.courses, cur.semesters);
+        }
         if (!cancelled) {
           setData((d) =>
             d.settings.spaceId === sid
@@ -171,6 +215,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [prediction, data.settings.notificationsEnabled, data.settings.remindDaysBefore]);
 
+  // 行程或課表變動時整批重排提醒(重複行程的展開結果會隨時間推移,逐筆維護會漏)
+  const primaryUserId = data.users.find((u) => u.isPrimary)?.id ?? data.users[0]?.id;
+  useEffect(() => {
+    if (!loaded.current) return;
+    if (data.settings.notificationsEnabled) {
+      void notif.syncEventReminders({
+        events: data.events,
+        courses: data.courses,
+        semesters: data.semesters,
+        courseOwnerId: primaryUserId,
+        courseRemindMinutes: data.settings.courseRemindMinutes,
+      });
+    } else {
+      void notif.cancelEventReminders();
+    }
+  }, [
+    data.events,
+    data.courses,
+    data.semesters,
+    primaryUserId,
+    data.settings.notificationsEnabled,
+    data.settings.courseRemindMinutes,
+  ]);
+
+  /**
+   * 跨裝置推播的登記。
+   *
+   * 只有在共享空間裡才有意義——推播的目的是通知「對方」,單機模式沒有對方。
+   * 關閉或離開空間時要取消登記,否則伺服器會繼續往這台裝置送。
+   */
+  const pushEnabled = !!data.settings.crossDevicePush;
+  useEffect(() => {
+    if (!loaded.current || !shared || !spaceId) return;
+    if (pushEnabled) {
+      void push.registerForSpace(spaceId);
+    } else {
+      void push.unregisterForSpace(spaceId);
+    }
+  }, [pushEnabled, shared, spaceId]);
+
+  // 分頁在前景時收到的推播不會觸發 service worker,必須自己顯示
+  useEffect(() => {
+    if (!pushEnabled || !shared) return;
+    return push.listenForegroundPush();
+  }, [pushEnabled, shared]);
+
   // 啟動時檢查 Google OAuth token 是否仍有效
   useEffect(() => {
     if (!ready) return;
@@ -195,9 +285,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
+  /**
+   * 蓋上修改時間與修改者。衝突偵測靠這個時間戳判斷「我編輯期間對方有沒有動過」,
+   * 因此每一條寫入路徑都必須經過這裡,漏掉任何一條都會讓偵測失效。
+   */
+  const stamp = useCallback(
+    (ev: CalendarEvent): CalendarEvent => ({
+      ...ev,
+      updatedAt: Date.now(),
+      updatedBy: ev.updatedBy ?? ev.createdBy,
+      updatedByDevice: deviceId.current,
+    }),
+    []
+  );
+
   const addEvent = useCallback(
     async (ev: CalendarEvent) => {
-      const synced = await trySyncGoogle(ev);
+      const synced = await trySyncGoogle(stamp(ev));
       setData((d) => ({ ...d, events: [...d.events, synced] }));
       if (shared && spaceId) {
         void fb.saveEventDoc(spaceId, synced);
@@ -205,12 +309,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         void notif.notifyEventChange(synced, userName(ev.createdBy), '新增');
       }
     },
-    [trySyncGoogle, shared, spaceId, userName]
+    [trySyncGoogle, stamp, shared, spaceId, userName]
   );
 
   const updateEvent = useCallback(
     async (ev: CalendarEvent) => {
-      const synced = await trySyncGoogle(ev);
+      const synced = await trySyncGoogle(stamp(ev));
       setData((d) => ({ ...d, events: d.events.map((e) => (e.id === ev.id ? synced : e)) }));
       if (shared && spaceId) {
         void fb.saveEventDoc(spaceId, synced);
@@ -218,7 +322,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         void notif.notifyEventChange(synced, userName(ev.createdBy), '修改');
       }
     },
-    [trySyncGoogle, shared, spaceId, userName]
+    [trySyncGoogle, stamp, shared, spaceId, userName]
   );
 
   const deleteEvent = useCallback(
@@ -233,7 +337,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       setData((d) => ({ ...d, events: d.events.filter((e) => e.id !== id) }));
       if (shared && spaceId) {
-        void fb.deleteEventDoc(spaceId, id);
+        try {
+          await fb.deleteEventDoc(spaceId, id);
+        } catch (e) {
+          // 遠端沒刪掉就把它放回來,否則訂閱推回時會像是「刪除失效」
+          if (ev) {
+            setData((d) =>
+              d.events.some((x) => x.id === id) ? d : { ...d, events: [...d.events, ev] }
+            );
+          }
+          throw new Error(syncErrorMessage('刪除行程', e));
+        }
       } else if (ev) {
         void notif.notifyEventChange(ev, userName(ev.createdBy), '刪除');
       }
@@ -258,9 +372,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const deletePeriod = useCallback(
-    (id: string) => {
+    async (id: string) => {
+      const removed = dataRef.current.periods.find((r) => r.id === id);
       setData((d) => ({ ...d, periods: d.periods.filter((r) => r.id !== id) }));
-      if (shared && spaceId) void fb.deletePeriodDoc(spaceId, id);
+      if (!(shared && spaceId)) return;
+      try {
+        await fb.deletePeriodDoc(spaceId, id);
+      } catch (e) {
+        if (removed) {
+          setData((d) =>
+            d.periods.some((r) => r.id === id) ? d : { ...d, periods: [...d.periods, removed] }
+          );
+        }
+        throw new Error(syncErrorMessage('刪除經期紀錄', e));
+      }
     },
     [shared, spaceId]
   );
@@ -281,10 +406,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [shared, spaceId]
   );
 
+  /**
+   * 刪除課程。
+   *
+   * 遠端刪除必須等結果:先前是 `void fb.deleteCourseDoc(...)`,失敗時沒有任何跡象,
+   * 但畫面已經移除了——雲端那筆還在,訂閱一推回來就變成「刪掉又自己跑回來」。
+   * 失敗時把那筆放回本機並往外拋,讓呼叫端能告訴使用者。
+   */
   const deleteCourse = useCallback(
-    (id: string) => {
+    async (id: string) => {
+      const removed = dataRef.current.courses.find((c) => c.id === id);
       setData((d) => ({ ...d, courses: d.courses.filter((x) => x.id !== id) }));
-      if (shared && spaceId) void fb.deleteCourseDoc(spaceId, id);
+      if (!(shared && spaceId)) return;
+      try {
+        await fb.deleteCourseDoc(spaceId, id);
+      } catch (e) {
+        if (removed) {
+          setData((d) =>
+            d.courses.some((c) => c.id === id) ? d : { ...d, courses: [...d.courses, removed] }
+          );
+        }
+        throw new Error(syncErrorMessage('刪除課程', e));
+      }
+    },
+    [shared, spaceId]
+  );
+
+  const importCourses = useCallback(
+    (removeIds: string[], entries: CourseEntry[]) => {
+      const rm = new Set(removeIds);
+      setData((d) => ({
+        ...d,
+        courses: [...d.courses.filter((c) => !rm.has(c.id)), ...entries],
+      }));
+      if (shared && spaceId) void fb.replaceCourseDocs(spaceId, removeIds, entries);
+    },
+    [shared, spaceId]
+  );
+
+  const upsertSemester = useCallback(
+    (meta: SemesterMeta) => {
+      setData((d) => {
+        const semesters = [...d.semesters.filter((s) => s.id !== meta.id), meta].sort(
+          (a, b) => semesterOrder(b.id) - semesterOrder(a.id)
+        );
+        if (shared && spaceId) void fb.saveSemesters(spaceId, semesters);
+        return { ...d, semesters };
+      });
     },
     [shared, spaceId]
   );
@@ -324,6 +492,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       },
     }));
   }, []);
+
+  const addCustomSymptom = useCallback((name: string) => {
+    setData((d) => {
+      const cur = d.settings.customSymptoms ?? [];
+      if (cur.includes(name)) return d;
+      return { ...d, settings: { ...d.settings, customSymptoms: [...cur, name] } };
+    });
+  }, []);
+
+  const setCourseRemindMinutes = useCallback((mins: number | null) => {
+    setData((d) => ({ ...d, settings: { ...d.settings, courseRemindMinutes: mins } }));
+  }, []);
+
+  const setCrossDevicePush = useCallback(
+    async (on: boolean): Promise<boolean> => {
+      if (!on) {
+        if (spaceId) await push.unregisterForSpace(spaceId);
+        setData((d) => ({ ...d, settings: { ...d.settings, crossDevicePush: false } }));
+        return true;
+      }
+      // 先確認真的拿得到 token 再記錄設定,否則設定顯示已開啟卻收不到推播
+      if (!spaceId) return false;
+      const ok = await push.registerForSpace(spaceId);
+      if (ok) setData((d) => ({ ...d, settings: { ...d.settings, crossDevicePush: true } }));
+      return ok;
+    },
+    [spaceId]
+  );
 
   const updateUser = useCallback(
     (u: UserProfile) => {
@@ -366,10 +562,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const createSharedSpace = useCallback(async (): Promise<string> => {
     const code = await fb.createSpace(data.users, data.events, data.periods, data.courses);
+    if (data.semesters.length) void fb.saveSemesters(code, data.semesters);
     if (authUser) void fb.bindUserSpace(authUser.uid, code);
     setData((d) => ({ ...d, settings: { ...d.settings, spaceId: code } }));
     return code;
-  }, [data.users, data.events, data.periods, data.courses, authUser]);
+  }, [data.users, data.events, data.periods, data.courses, data.semesters, authUser]);
 
   const joinSharedSpace = useCallback(
     async (code: string): Promise<boolean> => {
@@ -377,18 +574,83 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const exists = await fb.spaceExists(normalized);
       if (!exists) return false;
       // 把本機既有資料合併上去(id 唯一,不會重複)
-      await fb.uploadLocal(normalized, data.events, data.periods, data.courses);
+      await fb.uploadLocal(normalized, data.events, data.periods, data.courses, data.semesters);
       if (authUser) void fb.bindUserSpace(authUser.uid, normalized);
       setData((d) => ({ ...d, settings: { ...d.settings, spaceId: normalized } }));
       return true;
     },
-    [data.events, data.periods, data.courses, authUser]
+    [data.events, data.periods, data.courses, data.semesters, authUser]
   );
 
   const leaveSharedSpace = useCallback(() => {
     // 資料保留最後同步的副本,轉回本機模式
     setData((d) => ({ ...d, settings: { ...d.settings, spaceId: null } }));
   }, []);
+
+  /**
+   * 從 Google 日曆拉回變更。
+   *
+   * 有 syncToken 走增量;Google 回 410(token 過期)時自動退回完整同步重來一次,
+   * 否則使用者會卡在「同步不動」而不知道原因。
+   */
+  const pullFromGoogle = useCallback(async (): Promise<string> => {
+    // 先取一份快照:後面要拿它跟合併結果比對,不能等 setData 之後再讀
+    // dataRef(它由 effect 更新,時機依賴 React 的排程,不該當作同步值)
+    const snapshot = dataRef.current;
+    const owner = snapshot.users.find((u) => u.isPrimary)?.id ?? 'u1';
+
+    let pull = await gcal.pullEvents(snapshot.settings.googleSyncToken ?? null);
+    if (pull.tokenExpired) pull = await gcal.pullEvents(null);
+
+    const result = mergeGoogleEvents(snapshot.events, pull.events, owner);
+
+    setData((d) => ({
+      ...d,
+      events: result.events,
+      settings: {
+        ...d.settings,
+        googleSyncToken: pull.nextSyncToken ?? d.settings.googleSyncToken ?? null,
+        googleLastPullAt: Date.now(),
+      },
+    }));
+
+    // 共享模式下把合併結果同步給對方(未變動的項目是同一個物件參考,直接濾掉)
+    if (shared && spaceId) {
+      const beforeById = new Map(snapshot.events.map((e) => [e.id, e]));
+      for (const ev of result.events) {
+        if (beforeById.get(ev.id) !== ev) void fb.saveEventDoc(spaceId, ev);
+      }
+      const survivingIds = new Set(result.events.map((e) => e.id));
+      for (const e of snapshot.events) {
+        if (!survivingIds.has(e.id)) void fb.deleteEventDoc(spaceId, e.id);
+      }
+    }
+
+    return syncSummary(result);
+  }, [shared, spaceId]);
+
+  const restoreData = useCallback(
+    async (next: AppData) => {
+      // 保留目前的共享空間:備份不帶配對碼,匯入不該把裝置踢出空間
+      const keepSpaceId = dataRef.current.settings.spaceId ?? null;
+      const merged: AppData = {
+        ...next,
+        settings: { ...next.settings, spaceId: keepSpaceId },
+      };
+      setData(merged);
+      if (keepSpaceId && firebaseAvailable) {
+        await fb.uploadLocal(
+          keepSpaceId,
+          merged.events,
+          merged.periods,
+          merged.courses,
+          merged.semesters
+        );
+        await fb.saveUsers(keepSpaceId, merged.users);
+      }
+    },
+    [firebaseAvailable]
+  );
 
   const resetAll = useCallback(async () => {
     await clearData();
@@ -413,10 +675,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addCourse,
     updateCourse,
     deleteCourse,
+    importCourses,
+    upsertSemester,
     addCustomTag,
     removeCustomTag,
     addPeriodFieldName,
     removePeriodFieldName,
+    addCustomSymptom,
+    setCourseRemindMinutes,
+    setCrossDevicePush,
+    pullFromGoogle,
+    restoreData,
     updateUser,
     setNotificationsEnabled,
     setGoogleToken,

@@ -24,9 +24,11 @@ import {
   onSnapshot,
   writeBatch,
   serverTimestamp,
+  arrayUnion,
+  deleteField,
 } from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured } from '../config';
-import { CalendarEvent, CourseEntry, PeriodRecord, UserProfile } from '../types';
+import { CalendarEvent, CourseEntry, PeriodRecord, SemesterMeta, UserProfile } from '../types';
 
 let app: FirebaseApp | null = null;
 let db: Firestore | null = null;
@@ -104,7 +106,8 @@ export async function uploadLocal(
   code: string,
   events: CalendarEvent[],
   periods: PeriodRecord[],
-  courses: CourseEntry[]
+  courses: CourseEntry[],
+  semesters?: SemesterMeta[]
 ): Promise<void> {
   const d = getDb();
   if (!d) return;
@@ -112,6 +115,40 @@ export async function uploadLocal(
   for (const ev of events) batch.set(doc(d, 'spaces', code, 'events', ev.id), ev);
   for (const p of periods) batch.set(doc(d, 'spaces', code, 'periods', p.id), p);
   for (const c of courses) batch.set(doc(d, 'spaces', code, 'courses', c.id), c);
+  await batch.commit();
+  if (semesters?.length) await mergeSemesters(code, semesters);
+}
+
+/** 學期清單存在空間根文件上(小量資料,整份覆蓋) */
+export async function saveSemesters(code: string, semesters: SemesterMeta[]): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code), { semesters }, { merge: true });
+}
+
+/** 本機學期與雲端聯集(同 id 以本機為準),避免剛加入的裝置蓋掉雲端清單 */
+export async function mergeSemesters(code: string, local: SemesterMeta[]): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  const snap = await getDoc(doc(d, 'spaces', code));
+  const cloud = (snap.data()?.semesters as SemesterMeta[] | undefined) ?? [];
+  const merged = new Map<string, SemesterMeta>();
+  for (const s of cloud) merged.set(s.id, s);
+  for (const s of local) merged.set(s.id, s);
+  await setDoc(doc(d, 'spaces', code), { semesters: [...merged.values()] }, { merge: true });
+}
+
+/** 課表覆蓋:一次刪除舊課程並寫入新課程(匯入用) */
+export async function replaceCourseDocs(
+  code: string,
+  removeIds: string[],
+  added: CourseEntry[]
+): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  const batch = writeBatch(d);
+  for (const id of removeIds) batch.delete(doc(d, 'spaces', code, 'courses', id));
+  for (const c of added) batch.set(doc(d, 'spaces', code, 'courses', c.id), c);
   await batch.commit();
 }
 
@@ -126,6 +163,7 @@ export interface SpaceCallbacks {
   onEvents: (events: CalendarEvent[], remoteChanges: RemoteEventChange[]) => void;
   onPeriods: (periods: PeriodRecord[]) => void;
   onCourses: (courses: CourseEntry[]) => void;
+  onSemesters?: (semesters: SemesterMeta[]) => void;
 }
 
 /** 訂閱共享空間,回傳取消訂閱函式 */
@@ -136,6 +174,7 @@ export function subscribeSpace(code: string, cb: SpaceCallbacks): () => void {
   const unsubSpace = onSnapshot(doc(d, 'spaces', code), (snap) => {
     const data = snap.data();
     if (data?.users) cb.onUsers(data.users as UserProfile[]);
+    if (data?.semesters) cb.onSemesters?.(data.semesters as SemesterMeta[]);
   });
 
   let firstEvents = true;
@@ -208,4 +247,40 @@ export async function saveUsers(code: string, users: UserProfile[]): Promise<voi
   const d = getDb();
   if (!d) return;
   await setDoc(doc(d, 'spaces', code), { users }, { merge: true });
+}
+
+/**
+ * 空間的成員名單(firestore.rules 的 members 欄位)。
+ *
+ * 有 members 的空間只有名單內的登入帳號能存取,配對碼不再是通行證。
+ * 這是使用者主動「鎖定」才會發生的事,不會自動升級——
+ * 自動升級會把還沒有帳號的伴侶直接鎖在門外。
+ */
+export async function getSpaceMembers(code: string): Promise<string[] | null> {
+  const d = getDb();
+  if (!d) return null;
+  const snap = await getDoc(doc(d, 'spaces', code));
+  const members = snap.data()?.members as string[] | undefined;
+  return members ?? null;
+}
+
+/** 鎖定空間:把自己設為第一位成員,之後只有名單內的帳號能存取 */
+export async function lockSpace(code: string, uid: string): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code), { members: [uid] }, { merge: true });
+}
+
+/** 把另一個帳號加進成員名單 */
+export async function addSpaceMember(code: string, uid: string): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code), { members: arrayUnion(uid) }, { merge: true });
+}
+
+/** 解除鎖定:移除 members 欄位,回到配對碼存取模式 */
+export async function unlockSpace(code: string): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code), { members: deleteField() }, { merge: true });
 }

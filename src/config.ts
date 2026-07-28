@@ -27,6 +27,14 @@ export const firebaseConfig = {
   measurementId: process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID ?? '',
 };
 
+/**
+ * 網頁推播的 VAPID 公開金鑰。
+ * 是公開值(本來就會出現在前端 bundle),與 refresh token 那類機密不同。
+ */
+export const vapidKey = process.env.EXPO_PUBLIC_FIREBASE_VAPID_KEY ?? '';
+
+export const isPushConfigured = (): boolean => !!vapidKey && isFirebaseConfigured();
+
 export const isGoogleConfigured = (): boolean =>
   !!(googleOAuth.webClientId || googleOAuth.iosClientId || googleOAuth.androidClientId);
 

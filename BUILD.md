@@ -50,6 +50,30 @@ Xcode 內(只需設定一次):
 npx expo run:ios --device --configuration Release
 ```
 
+## Firebase 的 Android app 設定
+
+專案已在 Firebase(`daily-assistant-499012`,專案編號 76820653668)註冊 Android app:
+
+- App ID `1:76820653668:android:8092a04b2e09e1828ca171`,套件名稱 `com.nariaki.dailyassistant`
+- 設定檔 `google-services.json` 在專案根目錄,**不進版控**(含專案識別資訊)
+- `app.json` 的 `android.googleServicesFile` 指向它
+
+換機或重新 clone 後要重新取得設定檔:
+
+```bash
+npx firebase apps:sdkconfig ANDROID 1:76820653668:android:8092a04b2e09e1828ca171 --out google-services.json
+```
+
+**這個檔案只有原生推播(FCM)需要。** Auth 與 Firestore 走 Firebase JS SDK,
+設定值來自 `.env` 的 `EXPO_PUBLIC_FIREBASE_*`,沒有 `google-services.json` 也能運作——
+所以網頁版與現有的登入、同步功能都不依賴它。
+
+加了這個檔案之後要重新 prebuild 才會進到原生專案:
+
+```bash
+npx expo prebuild --platform android --clean
+```
+
 ## 注意事項
 
 - `.env` 的 `EXPO_PUBLIC_*` 會在建置時打進 bundle;改了 `.env` 要重新建置才生效。

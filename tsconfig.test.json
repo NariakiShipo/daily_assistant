@@ -1,0 +1,29 @@
+/*
+ * 單元測試專用編譯設定。
+ *
+ * Node 把 .ts 當 ESM 解析,而專案的 import 都不帶副檔名,無法直接 `node --test`。
+ * 因此先用 tsc 編成 CommonJS 到 .test-build/ 再跑,不需額外測試框架或依賴。
+ *
+ * 不繼承 tsconfig.json:expo/tsconfig.base 設了 customConditions,
+ * 與 CommonJS 的 moduleResolution 衝突(TS5098)。
+ *
+ * include 只列測試檔,tsc 會自動連帶編譯它們 import 到的模組——
+ * 這樣就不會去碰 react-native / firebase 那些需要執行環境的模組。
+ */
+{
+  "compilerOptions": {
+    "strict": true,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2022",
+    // 需要 dom:webNotifications 用到瀏覽器的 Notification API
+    "lib": ["es2023", "dom"],
+    "outDir": ".test-build",
+    "rootDir": ".",
+    "types": ["node"],
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/__tests__/**/*.ts"]
+}

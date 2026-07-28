@@ -7,28 +7,35 @@ import {
   View,
 } from 'react-native';
 import { useApp } from '../store/AppContext';
-import { PeriodRecord } from '../types';
-import { colors, spacing } from '../theme';
+import { FLOW_LABELS, FlowLevel, PeriodRecord } from '../types';
+import { colors, radius, spacing, tagColor } from '../theme';
 import { addDays, daysBetween, formatDateZh, isValidDateKey, isWithin, todayKey, uid } from '../utils/date';
 import { confirmDialog, notify } from '../utils/dialog';
 import { phaseNameZh } from '../services/periodPrediction';
 import { recommendations } from '../services/recommendations';
+import { cycleLengths, symptomCounts } from '../services/periodStats';
 import { Button, Card, Chip, SectionTitle } from '../components/ui';
 import PeriodEditModal from '../components/PeriodEditModal';
 import MiniCalendar from '../components/MiniCalendar';
 import PeriodCustomFields, { FieldRow, buildFieldRows, toCustomFields } from '../components/PeriodCustomFields';
+import PeriodSymptomFields from '../components/PeriodSymptomFields';
 
 const PeriodScreen: React.FC = () => {
-  const { data, prediction, phase, addPeriod, updatePeriod, deletePeriod } = useApp();
+  const { data, prediction, phase, addPeriod, updatePeriod, deletePeriod, addCustomSymptom } =
+    useApp();
   const [recorder, setRecorder] = useState(data.users[0]?.id ?? 'u1');
 
   const today = todayKey();
   const [recordDate, setRecordDate] = useState(today);
+  /** 展開「補記其他日期」的日曆;預設收合、直接記今天 */
+  const [backfill, setBackfill] = useState(false);
   const [editing, setEditing] = useState<PeriodRecord | null>(null);
   // 記錄當下的自訂欄位(預設帶出記住的欄位範本)
   const [recordFields, setRecordFields] = useState<FieldRow[]>(() =>
     buildFieldRows(data.settings.periodFieldNames ?? [], [])
   );
+  const [recordFlow, setRecordFlow] = useState<FlowLevel | null>(null);
+  const [recordSymptoms, setRecordSymptoms] = useState<string[]>([]);
   const sorted = useMemo(
     () => [...data.periods].sort((a, b) => b.startDate.localeCompare(a.startDate)),
     [data.periods]
@@ -73,11 +80,15 @@ const PeriodScreen: React.FC = () => {
       startDate: recordDate,
       recordedBy: recorder,
       customFields: toCustomFields(recordFields),
+      flow: recordFlow ?? undefined,
+      symptoms: recordSymptoms.length ? recordSymptoms : undefined,
     };
     addPeriod(rec);
     notify('已記錄', `經期開始:${formatDateZh(recordDate)}(由 ${recorderName(recorder)} 記錄)`);
     // 重設為空白範本,供下次記錄使用
     setRecordFields(buildFieldRows(data.settings.periodFieldNames ?? [], []));
+    setRecordFlow(null);
+    setRecordSymptoms([]);
   };
 
   const endPeriod = () => {
@@ -94,13 +105,21 @@ const PeriodScreen: React.FC = () => {
     confirmDialog(
       '刪除紀錄',
       `刪除 ${formatDateZh(p.startDate)} 開始的紀錄?`,
-      () => deletePeriod(p.id),
+      () => {
+        void deletePeriod(p.id).catch((e: unknown) =>
+          notify('刪除失敗', e instanceof Error ? e.message : String(e))
+        );
+      },
       { confirmLabel: '刪除', destructive: true }
     );
   };
 
   const rec = phase ? recommendations[phase.phase] : null;
   const daysToNext = prediction ? daysBetween(today, prediction.nextStart) : null;
+
+  const topSymptoms = useMemo(() => symptomCounts(data.periods).slice(0, 6), [data.periods]);
+  const cycles = useMemo(() => cycleLengths(data.periods).slice(-8), [data.periods]);
+  const maxCycle = useMemo(() => Math.max(...cycles.map((c) => c.days), 1), [cycles]);
 
   return (
     <ScrollView
@@ -148,15 +167,19 @@ const PeriodScreen: React.FC = () => {
               key={prediction.nextStart}
               initialMonth={prediction.nextStart}
               getMark={(key) => {
+                // 最可能開始日:實心主色、白色粗體日期(取代原本的框線方框)
                 if (key === prediction.nextStart)
-                  return { bg: colors.periodDay, border: colors.primary };
+                  return { bg: colors.primary, textColor: '#fff', textBold: true };
+                // 歷史紀錄的經期日也顯示在這份日曆(往前翻月份可對照)
+                if (periodDays.has(key)) return { bg: colors.periodDay };
                 if (key === prediction.ovulationDate) return { bg: colors.ovulation };
                 if (isWithin(key, prediction.windowStart, prediction.windowEnd))
                   return { bg: colors.predictedDay };
                 return undefined;
               }}
               legend={[
-                { color: colors.periodDay, label: '最可能開始日' },
+                { color: colors.primary, label: '最可能開始日' },
+                { color: colors.periodDay, label: '已記錄經期' },
                 { color: colors.predictedDay, label: '可能區間' },
                 { color: colors.ovulation, label: '排卵日' },
               ]}
@@ -180,22 +203,45 @@ const PeriodScreen: React.FC = () => {
             />
           ))}
         </View>
-        <Text style={s.label}>點選日曆選擇記錄日期(粉色為已記錄的經期日)</Text>
-        <MiniCalendar
-          selected={recordDate}
-          onSelect={setRecordDate}
-          maxDate={today}
-          getMark={(key) =>
-            periodDays.has(key) ? { bg: colors.periodDay } : undefined
-          }
-        />
-        {recordDate !== today && (
-          <View style={{ flexDirection: 'row', marginTop: spacing.sm }}>
-            <Chip label="回到今天" onPress={() => setRecordDate(today)} />
-          </View>
+        {/* 純按鈕記錄:預設記今天;要補記過去日期才展開日曆 */}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+          <Chip
+            label="📅 補記其他日期"
+            active={backfill}
+            onPress={() => {
+              if (backfill) setRecordDate(today); // 收合時回到今天
+              setBackfill(!backfill);
+            }}
+          />
+          {backfill && recordDate !== today && (
+            <Chip label="回到今天" color={colors.textMuted} onPress={() => setRecordDate(today)} />
+          )}
+        </View>
+        {backfill && (
+          <>
+            <Text style={[s.label, { marginTop: spacing.xs }]}>
+              點選日曆選擇記錄日期(粉色為已記錄的經期日)
+            </Text>
+            <MiniCalendar
+              selected={recordDate}
+              onSelect={setRecordDate}
+              maxDate={today}
+              getMark={(key) =>
+                periodDays.has(key) ? { bg: colors.periodDay } : undefined
+              }
+            />
+          </>
         )}
         {!ongoing && (
           <>
+            <PeriodSymptomFields
+              flow={recordFlow}
+              onChangeFlow={setRecordFlow}
+              symptoms={recordSymptoms}
+              onChangeSymptoms={setRecordSymptoms}
+              customSymptoms={data.settings.customSymptoms ?? []}
+              onAddCustomSymptom={addCustomSymptom}
+            />
             <Text style={[s.label, { marginTop: spacing.md }]}>
               自訂紀錄(選填,例如:經前痛持續時間)
             </Text>
@@ -204,12 +250,12 @@ const PeriodScreen: React.FC = () => {
         )}
         {!ongoing ? (
           <Button
-            label={`記錄經期開始(${isValidDateKey(recordDate) ? formatDateZh(recordDate) : recordDate})`}
+            label={`🩸 記錄經期開始(${recordDate === today ? '今天' : formatDateZh(recordDate)})`}
             onPress={startPeriod}
           />
         ) : (
           <Button
-            label={`記錄經期結束(${isValidDateKey(recordDate) ? formatDateZh(recordDate) : recordDate})`}
+            label={`✅ 記錄經期結束(${recordDate === today ? '今天' : formatDateZh(recordDate)})`}
             onPress={endPeriod}
           />
         )}
@@ -241,6 +287,41 @@ const PeriodScreen: React.FC = () => {
         </Card>
       )}
 
+      {/* 統計 */}
+      {(topSymptoms.length > 0 || cycles.length > 0) && (
+        <Card>
+          <SectionTitle>統計</SectionTitle>
+          {cycles.length > 0 && (
+            <>
+              <Text style={s.label}>近期週期長度(最近 {cycles.length} 次)</Text>
+              {cycles.map((c) => (
+                <View key={c.startDate} style={s.barRow}>
+                  <Text style={s.barLabel}>{formatDateZh(c.startDate)}</Text>
+                  <View style={s.barTrack}>
+                    <View style={[s.barFill, { width: `${(c.days / maxCycle) * 100}%` }]} />
+                  </View>
+                  <Text style={s.barValue}>{c.days} 天</Text>
+                </View>
+              ))}
+            </>
+          )}
+          {topSymptoms.length > 0 && (
+            <>
+              <Text style={[s.label, { marginTop: spacing.md }]}>最常記錄的症狀</Text>
+              <View style={s.badgeWrap}>
+                {topSymptoms.map((sym) => (
+                  <View key={sym.name} style={[s.fieldBadge, { backgroundColor: tagColor(sym.name) }]}>
+                    <Text style={s.fieldBadgeText}>
+                      {sym.name} ×{sym.count}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </>
+          )}
+        </Card>
+      )}
+
       {/* 歷史紀錄 */}
       <SectionTitle>歷史紀錄({sorted.length})</SectionTitle>
       {sorted.length === 0 && <Text style={s.empty}>尚無紀錄</Text>}
@@ -253,10 +334,27 @@ const PeriodScreen: React.FC = () => {
                 ? ` – ${formatDateZh(p.endDate)}(${daysBetween(p.startDate, p.endDate) + 1} 天)`
                 : ' – 進行中'}
             </Text>
+            {(p.flow || p.symptoms?.length) && (
+              <View style={s.badgeWrap}>
+                {p.flow && (
+                  <View style={[s.fieldBadge, { backgroundColor: colors.primary }]}>
+                    <Text style={s.fieldBadgeText}>經血量 {FLOW_LABELS[p.flow]}</Text>
+                  </View>
+                )}
+                {p.symptoms?.map((name) => (
+                  <View key={name} style={[s.fieldBadge, { backgroundColor: tagColor(name) }]}>
+                    <Text style={s.fieldBadgeText}>{name}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
             {p.customFields?.map((f) => (
-              <Text key={f.name} style={s.historyField}>
-                · {f.name}:{f.value}
-              </Text>
+              <View key={f.name} style={s.historyFieldRow}>
+                <View style={[s.fieldBadge, { backgroundColor: tagColor(f.name) }]}>
+                  <Text style={s.fieldBadgeText}>{f.name}</Text>
+                </View>
+                <Text style={s.historyField}>{f.value}</Text>
+              </View>
             ))}
             <Text style={s.historyMeta}>由 {recorderName(p.recordedBy)} 記錄(點一下編輯,長按刪除)</Text>
           </Card>
@@ -281,7 +379,28 @@ const s = StyleSheet.create({
   disclaimer: { fontSize: 11, color: colors.textMuted, marginTop: spacing.md, fontStyle: 'italic' },
   empty: { color: colors.textMuted, fontSize: 13 },
   historyMain: { fontSize: 14, fontWeight: '600', color: colors.text },
-  historyField: { fontSize: 13, color: colors.text, marginTop: 3 },
+  historyFieldRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  badgeWrap: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 6, gap: 4 },
+  barRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6 },
+  barLabel: { fontSize: 11, color: colors.textMuted, width: 58 },
+  barTrack: {
+    flex: 1,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.primarySoft,
+    marginHorizontal: spacing.sm,
+    overflow: 'hidden',
+  },
+  barFill: { height: 10, borderRadius: 5, backgroundColor: colors.primary },
+  barValue: { fontSize: 11, color: colors.text, width: 42, textAlign: 'right' },
+  fieldBadge: {
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    marginRight: 6,
+  },
+  fieldBadgeText: { fontSize: 11, color: '#fff', fontWeight: '700' },
+  historyField: { fontSize: 13, color: colors.text },
   historyMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
 });
 

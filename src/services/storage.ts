@@ -11,6 +11,7 @@ export const defaultData: AppData = {
   events: [],
   periods: [],
   courses: [],
+  semesters: [],
   settings: {
     notificationsEnabled: false,
     googleConnected: false,
@@ -18,6 +19,8 @@ export const defaultData: AppData = {
     spaceId: null,
     customTags: [],
     periodFieldNames: [],
+    customSymptoms: [],
+    crossDevicePush: false,
   },
 };
 

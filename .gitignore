@@ -39,11 +39,14 @@ Thumbs.db
 # ===== 編輯器 / IDE =====
 .vscode/
 .idea/
+# Claude Code 的本機設定(launch.json 含本機其他專案路徑)
+.claude/
 *.swp
 *.swo
 
 # ===== 建置產物 =====
 build/
+.test-build/
 *.log
 npm-debug.log*
 yarn-debug.log*

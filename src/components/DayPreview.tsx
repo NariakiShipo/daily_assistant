@@ -3,18 +3,19 @@ import { Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'rea
 import { CalendarEvent, PRIORITY_LABELS, TAG_DONE, UserProfile } from '../types';
 import { colors, priorityColors, radius, spacing } from '../theme';
 import { formatDateZh } from '../utils/date';
+import { EventInstance } from '../services/recurrence';
 import { Dot } from './ui';
 
 interface Props {
   visible: boolean;
   /** YYYY-MM-DD */
   dateKey: string;
-  /** 該日行程(已依時間排序) */
-  events: CalendarEvent[];
+  /** 該日行程(已依時間排序;重複行程為展開後的實例) */
+  events: EventInstance[];
   users: UserProfile[];
   onClose: () => void;
   /** 點某筆行程 → 開啟編輯 */
-  onPickEvent: (ev: CalendarEvent) => void;
+  onPickEvent: (ev: EventInstance) => void;
   /** 新增該日行程 */
   onAddNew: () => void;
 }
@@ -22,7 +23,12 @@ interface Props {
 const ownersOf = (e: CalendarEvent): string[] =>
   e.ownerIds?.length ? e.ownerIds : [e.ownerId];
 
-/** 點日曆格子彈出的當日行程清單 */
+/**
+ * 點日曆格子彈出的當日行程清單。
+ *
+ * 只顯示行程,不混入課表——課表本身已有專屬頁面與「今天」卡片,
+ * 在這裡重複列出會讓當天真正要注意的事情被固定的課程淹沒。
+ */
 const DayPreview: React.FC<Props> = ({
   visible,
   dateKey,
@@ -47,6 +53,7 @@ const DayPreview: React.FC<Props> = ({
             </TouchableOpacity>
           </View>
           <ScrollView style={{ maxHeight: 320 }}>
+            {events.length === 0 && <Text style={s.empty}>這天沒有行程</Text>}
             {events.map((e) => {
               const done = !!e.tags?.includes(TAG_DONE);
               return (
@@ -56,10 +63,9 @@ const DayPreview: React.FC<Props> = ({
                       <Dot key={oid} color={colorOf(oid)} size={8} />
                     ))}
                   </View>
-                  <Text style={s.time}>
-                    {e.startTime}–{e.endTime}
-                  </Text>
+                  <Text style={s.time}>{e.allDay ? '整天' : `${e.startTime}–${e.endTime}`}</Text>
                   <Text style={[s.rowTitle, done && s.rowTitleDone]} numberOfLines={1}>
+                    {e.recurrence ? '🔁 ' : ''}
                     {e.title}
                   </Text>
                   {e.priority && (
@@ -118,6 +124,7 @@ const s = StyleSheet.create({
   time: { fontSize: 12, color: colors.textMuted, marginRight: spacing.sm },
   rowTitle: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
   rowTitleDone: { textDecorationLine: 'line-through', color: colors.textMuted },
+  empty: { fontSize: 13, color: colors.textMuted, paddingVertical: spacing.sm },
   badge: {
     borderRadius: radius.pill,
     paddingHorizontal: 6,
