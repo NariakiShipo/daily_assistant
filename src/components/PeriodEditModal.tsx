@@ -83,8 +83,9 @@ const PeriodEditModal: React.FC<Props> = ({ visible, onClose, record }) => {
       '刪除紀錄',
       '確定刪除這筆經期紀錄?',
       () => {
-        deletePeriod(record.id);
-        onClose();
+        void deletePeriod(record.id).then(onClose, (e: unknown) =>
+          notify('刪除失敗', e instanceof Error ? e.message : String(e))
+        );
       },
       { confirmLabel: '刪除', destructive: true }
     );

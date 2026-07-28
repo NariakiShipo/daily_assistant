@@ -105,7 +105,11 @@ const PeriodScreen: React.FC = () => {
     confirmDialog(
       '刪除紀錄',
       `刪除 ${formatDateZh(p.startDate)} 開始的紀錄?`,
-      () => deletePeriod(p.id),
+      () => {
+        void deletePeriod(p.id).catch((e: unknown) =>
+          notify('刪除失敗', e instanceof Error ? e.message : String(e))
+        );
+      },
       { confirmLabel: '刪除', destructive: true }
     );
   };

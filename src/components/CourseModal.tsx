@@ -181,8 +181,15 @@ const CourseModal: React.FC<Props> = ({
       if (existing) updateCourse({ ...existing, ...base });
       else addCourse({ ...base, id: uid() });
     }
-    for (const leftover of reusable) deleteCourse(leftover.id);
-    onClose();
+    // 多出來的時段要刪掉;失敗就別關視窗,讓使用者看得到並能重試
+    void (async () => {
+      try {
+        for (const leftover of reusable) await deleteCourse(leftover.id);
+        onClose();
+      } catch (e) {
+        notify('部分時段刪除失敗', e instanceof Error ? e.message : String(e));
+      }
+    })();
   };
 
   const remove = () => {
@@ -191,8 +198,16 @@ const CourseModal: React.FC<Props> = ({
       '刪除課程',
       `確定刪除「${course.title}」的所有時段(${group.length} 段)?`,
       () => {
-        for (const g of group) deleteCourse(g.id);
-        onClose();
+        void (async () => {
+          try {
+            // 逐段等結果:共享模式下任何一段刪除失敗都必須讓使用者知道,
+            // 否則畫面看似刪掉了,雲端那筆卻還在,之後又會被推回來
+            for (const g of group) await deleteCourse(g.id);
+            onClose();
+          } catch (e) {
+            notify('刪除失敗', e instanceof Error ? e.message : String(e));
+          }
+        })();
       },
       { confirmLabel: '刪除', destructive: true }
     );

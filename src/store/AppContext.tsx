@@ -22,6 +22,7 @@ import { predictNextCycle, getCurrentPhase, PhaseInfo } from '../services/period
 import * as notif from '../services/notifications';
 import * as gcal from '../services/googleCalendar';
 import * as fb from '../services/firebaseSync';
+import { syncErrorMessage } from '../services/syncError';
 import * as auth from '../services/auth';
 import * as push from '../services/push';
 import { mergeGoogleEvents, syncSummary } from '../services/googleSync';
@@ -44,11 +45,13 @@ interface AppContextValue {
   // periods
   addPeriod: (p: PeriodRecord) => void;
   updatePeriod: (p: PeriodRecord) => void;
-  deletePeriod: (id: string) => void;
+  /** 刪除經期紀錄;遠端刪除失敗會還原本機並拋出錯誤 */
+  deletePeriod: (id: string) => Promise<void>;
   // courses
   addCourse: (c: CourseEntry) => void;
   updateCourse: (c: CourseEntry) => void;
-  deleteCourse: (id: string) => void;
+  /** 刪除課程;遠端刪除失敗會還原本機並拋出錯誤 */
+  deleteCourse: (id: string) => Promise<void>;
   /** 課表匯入:一次移除指定課程並寫入新課程(覆蓋邏輯由呼叫端決定) */
   importCourses: (removeIds: string[], entries: CourseEntry[]) => void;
   // semesters
@@ -172,8 +175,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           await fb.bindUserSpace(authUser.uid, sid);
         }
-        // 把本機資料合併上傳(id 不變,重複者覆蓋,不會弄丟雲端既有資料)
-        await fb.uploadLocal(sid, cur.events, cur.periods, cur.courses, cur.semesters);
+        /*
+         * 只在「這台裝置還沒跟這個空間同步過」時把本機資料推上去。
+         *
+         * 先前是每次登入都無條件整批上傳,而 uploadLocal 只寫不刪——已經在雲端
+         * 刪掉的項目會被本機的舊快取重新寫回去,再由訂閱推回所有裝置,看起來就像
+         * 「刪掉的東西自己跑回來」。已經在同步的裝置應該以雲端為準。
+         */
+        if (cur.settings.spaceId !== sid) {
+          await fb.uploadLocal(sid, cur.events, cur.periods, cur.courses, cur.semesters);
+        }
         if (!cancelled) {
           setData((d) =>
             d.settings.spaceId === sid
@@ -326,7 +337,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       setData((d) => ({ ...d, events: d.events.filter((e) => e.id !== id) }));
       if (shared && spaceId) {
-        void fb.deleteEventDoc(spaceId, id);
+        try {
+          await fb.deleteEventDoc(spaceId, id);
+        } catch (e) {
+          // 遠端沒刪掉就把它放回來,否則訂閱推回時會像是「刪除失效」
+          if (ev) {
+            setData((d) =>
+              d.events.some((x) => x.id === id) ? d : { ...d, events: [...d.events, ev] }
+            );
+          }
+          throw new Error(syncErrorMessage('刪除行程', e));
+        }
       } else if (ev) {
         void notif.notifyEventChange(ev, userName(ev.createdBy), '刪除');
       }
@@ -351,9 +372,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const deletePeriod = useCallback(
-    (id: string) => {
+    async (id: string) => {
+      const removed = dataRef.current.periods.find((r) => r.id === id);
       setData((d) => ({ ...d, periods: d.periods.filter((r) => r.id !== id) }));
-      if (shared && spaceId) void fb.deletePeriodDoc(spaceId, id);
+      if (!(shared && spaceId)) return;
+      try {
+        await fb.deletePeriodDoc(spaceId, id);
+      } catch (e) {
+        if (removed) {
+          setData((d) =>
+            d.periods.some((r) => r.id === id) ? d : { ...d, periods: [...d.periods, removed] }
+          );
+        }
+        throw new Error(syncErrorMessage('刪除經期紀錄', e));
+      }
     },
     [shared, spaceId]
   );
@@ -374,10 +406,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [shared, spaceId]
   );
 
+  /**
+   * 刪除課程。
+   *
+   * 遠端刪除必須等結果:先前是 `void fb.deleteCourseDoc(...)`,失敗時沒有任何跡象,
+   * 但畫面已經移除了——雲端那筆還在,訂閱一推回來就變成「刪掉又自己跑回來」。
+   * 失敗時把那筆放回本機並往外拋,讓呼叫端能告訴使用者。
+   */
   const deleteCourse = useCallback(
-    (id: string) => {
+    async (id: string) => {
+      const removed = dataRef.current.courses.find((c) => c.id === id);
       setData((d) => ({ ...d, courses: d.courses.filter((x) => x.id !== id) }));
-      if (shared && spaceId) void fb.deleteCourseDoc(spaceId, id);
+      if (!(shared && spaceId)) return;
+      try {
+        await fb.deleteCourseDoc(spaceId, id);
+      } catch (e) {
+        if (removed) {
+          setData((d) =>
+            d.courses.some((c) => c.id === id) ? d : { ...d, courses: [...d.courses, removed] }
+          );
+        }
+        throw new Error(syncErrorMessage('刪除課程', e));
+      }
     },
     [shared, spaceId]
   );

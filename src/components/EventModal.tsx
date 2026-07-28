@@ -310,7 +310,9 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
         ? `「${series.title}」的所有重複都會被刪除,確定嗎?`
         : `確定刪除「${series.title}」?`,
       () => {
-        void deleteEvent(series.id).then(onClose);
+        void deleteEvent(series.id).then(onClose, (e: unknown) =>
+          notify('刪除失敗', e instanceof Error ? e.message : String(e))
+        );
       },
       { confirmLabel: '刪除', destructive: true }
     );
