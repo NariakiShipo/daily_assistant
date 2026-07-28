@@ -21,16 +21,14 @@ import {
   formatDateZh,
   formatMonthZh,
   fromDateKey,
-  isWithin,
   monthGrid,
   todayKey,
   weekdayZh,
   addDays,
 } from '../utils/date';
-import { PERIOD_SLOTS } from '../constants/timetable';
 import { Card, Chip, Dot, SectionTitle } from '../components/ui';
 import EventModal from '../components/EventModal';
-import DayPreview, { PreviewCourse } from '../components/DayPreview';
+import DayPreview from '../components/DayPreview';
 import {
   EventInstance,
   expandEvents,
@@ -51,7 +49,7 @@ const VIEW_MODES: { key: ViewMode; label: string }[] = [
 ];
 
 const CalendarScreen: React.FC = () => {
-  const { data, prediction, updateEvent } = useApp();
+  const { data, updateEvent } = useApp();
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth()); // 0-based
@@ -128,54 +126,6 @@ const CalendarScreen: React.FC = () => {
     }
     return map;
   }, [monthEvents]);
-
-  /** 本月每天的課程(依課表推算:有學期的看起訖日,未分類課恆生效) */
-  const coursesByDate = useMemo(() => {
-    const map: Record<string, PreviewCourse[]> = {};
-    if (!data.courses.length) return map;
-    const semById = new Map(data.semesters.map((sm) => [sm.id, sm]));
-    for (const key of cells) {
-      if (!key) continue;
-      const weekday = fromDateKey(key).getDay();
-      if (weekday < 1 || weekday > 5) continue;
-      const list = data.courses
-        .filter((c) => {
-          if (c.weekday !== weekday) return false;
-          if (filterUser && c.ownerId !== filterUser) return false;
-          if (!c.semesterId) return true;
-          const sem = semById.get(c.semesterId);
-          return !sem || isWithin(key, sem.startDate, sem.endDate);
-        })
-        .map(
-          (c): PreviewCourse => ({
-            id: c.id,
-            title: c.title,
-            location: c.location,
-            startTime: PERIOD_SLOTS[c.startPeriod]?.start ?? '00:00',
-            endTime: PERIOD_SLOTS[Math.min(c.endPeriod, PERIOD_SLOTS.length - 1)]?.end ?? '00:00',
-            color: c.color,
-            ownerId: c.ownerId,
-          })
-        )
-        .sort((a, b) => a.startTime.localeCompare(b.startTime));
-      if (list.length) map[key] = list;
-    }
-    return map;
-  }, [cells, data.courses, data.semesters, filterUser]);
-
-  /** 經期實際日(粉底)與預測區間(淡粉框) */
-  const periodDays = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of data.periods) {
-      const end = p.endDate ?? addDays(p.startDate, 4);
-      let d = p.startDate;
-      while (d <= end) {
-        set.add(d);
-        d = addDays(d, 1);
-      }
-    }
-    return set;
-  }, [data.periods]);
 
   const userOf = (id: string) => data.users.find((u) => u.id === id);
 
@@ -308,23 +258,15 @@ const CalendarScreen: React.FC = () => {
               if (!key) return <View key={`empty-${i}`} style={s.cell} />;
               const dayNum = Number(key.slice(8));
               const evs = eventsByDate[key] ?? [];
-              const isPeriod = periodDays.has(key);
-              const isPredicted =
-                prediction && isWithin(key, prediction.windowStart, prediction.windowEnd);
               const isSelected = key === selected;
               const isToday = key === today;
               return (
                 <TouchableOpacity
                   key={key}
-                  style={[
-                    s.cell,
-                    isPeriod && { backgroundColor: colors.periodDay },
-                    !isPeriod && isPredicted && { backgroundColor: colors.predictedDay },
-                    isSelected && s.cellSelected,
-                  ]}
+                  style={[s.cell, isSelected && s.cellSelected]}
                   onPress={() => {
                     setSelected(key);
-                    if (evs.length || coursesByDate[key]) setPreviewKey(key);
+                    if (evs.length) setPreviewKey(key);
                   }}
                 >
                   <Text style={[s.cellDay, isToday && s.todayText]}>{dayNum}</Text>
@@ -354,11 +296,8 @@ const CalendarScreen: React.FC = () => {
               );
             })}
           </View>
+          {/* 圖例只留成員色;經期與預測經期改為只在「經期」頁顯示 */}
           <View style={s.legend}>
-            <View style={[s.legendSwatch, { backgroundColor: colors.periodDay }]} />
-            <Text style={s.legendText}>經期</Text>
-            <View style={[s.legendSwatch, { backgroundColor: colors.predictedDay }]} />
-            <Text style={s.legendText}>預測經期</Text>
             {data.users.map((u) => (
               <React.Fragment key={u.id}>
                 <Dot color={u.color} size={8} />
@@ -457,7 +396,6 @@ const CalendarScreen: React.FC = () => {
         visible={!!previewKey}
         dateKey={previewKey ?? ''}
         events={previewKey ? (eventsByDate[previewKey] ?? []) : []}
-        courses={previewKey ? (coursesByDate[previewKey] ?? []) : []}
         users={data.users}
         onClose={() => setPreviewKey(null)}
         onPickEvent={(ev) => {
@@ -621,7 +559,6 @@ const s = StyleSheet.create({
     marginTop: spacing.sm,
     paddingHorizontal: spacing.xs,
   },
-  legendSwatch: { width: 12, height: 12, borderRadius: 3, marginRight: 4 },
   legendText: { fontSize: 11, color: colors.textMuted, marginRight: spacing.md, marginLeft: 2 },
   empty: { color: colors.textMuted, fontSize: 13, marginBottom: spacing.md },
   eventRow: { flexDirection: 'row', alignItems: 'center' },
