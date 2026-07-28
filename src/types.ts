@@ -31,6 +31,12 @@ export interface CalendarEvent {
   ownerIds?: string[];
   /** 由誰建立(共同編輯時可能不同) */
   createdBy: string;
+  /** 最後修改時間(epoch ms);用來偵測兩人同時編輯同一筆 */
+  updatedAt?: number;
+  /** 最後由誰修改 */
+  updatedBy?: string;
+  /** 最後由哪台裝置修改;伺服器推播時用來略過來源裝置,不推給自己 */
+  updatedByDevice?: string;
   /** 已同步至 Google Calendar 的事件 ID */
   googleEventId?: string;
   /** 是否要求同步至 Google Calendar */
@@ -250,6 +256,12 @@ export interface AppSettings {
   customSymptoms?: string[];
   /** 上課前幾分鐘提醒(未設 / null = 不提醒) */
   courseRemindMinutes?: number | null;
+  /** 跨裝置推播:對方改動共用行程時,即使 App 沒開也通知 */
+  crossDevicePush?: boolean;
+  /** Google 日曆增量同步用的 token(由 Google 發放,過期會自動重做完整同步) */
+  googleSyncToken?: string | null;
+  /** 上次從 Google 拉取的時間(epoch ms),顯示用 */
+  googleLastPullAt?: number | null;
 }
 
 export interface AppData {
