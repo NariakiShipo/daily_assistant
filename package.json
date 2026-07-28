@@ -8,7 +8,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test \".test-build/**/*.test.js\""
+    "test": "tsc -p tsconfig.test.json && node --test \".test-build/**/*.test.js\" \"functions/test/**/*.test.js\""
   },
   "dependencies": {
     "@dataconnect/generated": "file:src/dataconnect-generated",

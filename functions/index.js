@@ -16,9 +16,12 @@
  * 執行環境 Node 22(Node 20 於 2026-10-30 停用)。
  */
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
+const { getMessaging } = require('firebase-admin/messaging');
+const { buildEventPush, targetTokens } = require('./pushMessage');
 
 initializeApp();
 const db = getFirestore();
@@ -136,6 +139,63 @@ exports.getCalendarToken = onCall(
         return { connected: false };
       }
       throw new HttpsError('unavailable', `更新 Google token 失敗:${e.message}`);
+    }
+  }
+);
+
+/**
+ * 共用行程變動 → 推播給空間內其他裝置。
+ *
+ * 為什麼需要:App 沒開時 Firestore 的即時訂閱不會執行,對方改了行程你不會知道。
+ * 本機通知只在 App 執行中有效,這支補的正是那個缺口。
+ *
+ * 不推播的情況(判斷邏輯在 pushMessage.js,有單元測試):
+ * - 批次重寫(登入/加入空間時的 uploadLocal)——否則對方會被幾十則推播洗版
+ * - 內容沒有實際變更
+ * - 改動來源那台裝置自己
+ */
+exports.onEventWritten = onDocumentWritten(
+  { region: REGION, document: 'spaces/{spaceId}/events/{eventId}' },
+  async (event) => {
+    const before = event.data?.before?.data() ?? null;
+    const after = event.data?.after?.data() ?? null;
+
+    const push = buildEventPush(before, after, Date.now());
+    if (!push.send) return;
+
+    const { spaceId } = event.params;
+    const snap = await db.collection('spaces').doc(spaceId).collection('pushTokens').get();
+    const devices = snap.docs.map((d) => ({ id: d.id, token: d.data().token }));
+    const tokens = targetTokens(devices, push.fromDevice);
+    if (!tokens.length) return;
+
+    // 只送 data payload:網頁端統一由 service worker / onMessage 顯示,
+    // 用 notification payload 會讓前景訊息被瀏覽器自行處理而重複顯示
+    const res = await getMessaging().sendEachForMulticast({
+      tokens,
+      data: { title: push.title, body: push.body, tag: push.tag ?? '' },
+      webpush: { headers: { Urgency: 'normal' } },
+    });
+
+    // 清掉已失效的 token,否則會一直累積並拖慢每次推播
+    const dead = [];
+    res.responses.forEach((r, i) => {
+      const code = r.error?.code ?? '';
+      if (
+        code.includes('registration-token-not-registered') ||
+        code.includes('invalid-argument') ||
+        code.includes('invalid-registration-token')
+      ) {
+        dead.push(tokens[i]);
+      }
+    });
+    if (dead.length) {
+      const stale = devices.filter((d) => dead.includes(d.token));
+      await Promise.all(
+        stale.map((d) =>
+          db.collection('spaces').doc(spaceId).collection('pushTokens').doc(d.id).delete()
+        )
+      );
     }
   }
 );
