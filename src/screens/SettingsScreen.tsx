@@ -24,9 +24,10 @@ import { isWebNotifications, sendTestNotification } from '../services/notificati
 import { isServerManaged, signOutGoogle } from '../services/googleAuth';
 import { authErrorMessage, signInEmail, signOutUser, signUpEmail } from '../services/auth';
 import { useGoogleLogin } from '../services/googleLogin';
-import { useCalendarConnect } from '../services/calendarConnect';
+import { oauthErrorMessage, useCalendarConnect } from '../services/calendarConnect';
 import { disconnectServerCalendar } from '../services/calendarBackend';
 import { getSpaceMembers, lockSpace, unlockSpace } from '../services/firebaseSync';
+import { isPushSupported } from '../services/push';
 import { confirmDialog, notify } from '../utils/dialog';
 import { backupFileName, buildBackup, parseBackup } from '../services/backup';
 import { pickBackup, saveBackup } from '../services/backupFile';
@@ -40,6 +41,8 @@ const SettingsScreen: React.FC = () => {
     updateUser,
     setNotificationsEnabled,
     setCourseRemindMinutes,
+    setCrossDevicePush,
+    pullFromGoogle,
     restoreData,
     setGoogleToken,
     setGoogleConnected,
@@ -96,10 +99,7 @@ const SettingsScreen: React.FC = () => {
       setPermanent(true);
       notify('已永久連接 Google 日曆', '授權由伺服器自動續期,不會再定時斷線。');
     } else {
-      notify(
-        '永久連接失敗',
-        error instanceof Error ? error.message : String(error ?? '請再試一次。')
-      );
+      notify('永久連接失敗', oauthErrorMessage(error));
     }
   }, authUser?.email ?? undefined);
 
@@ -180,6 +180,31 @@ const SettingsScreen: React.FC = () => {
       () => void run(),
       { confirmLabel: '鎖定', destructive: true }
     );
+  };
+
+  const [pulling, setPulling] = useState(false);
+  const doPull = async () => {
+    setPulling(true);
+    try {
+      notify('同步完成', await pullFromGoogle());
+    } catch (e) {
+      notify('同步失敗', e instanceof Error ? e.message : String(e));
+    } finally {
+      setPulling(false);
+    }
+  };
+
+  const togglePush = async (on: boolean) => {
+    if (on && !isPushSupported()) {
+      return notify(
+        '此裝置不支援跨裝置推播',
+        'iOS 的 Safari 需要先把網站「加入主畫面」再開啟;手機 App 版目前尚未支援。'
+      );
+    }
+    const ok = await setCrossDevicePush(on);
+    if (on && !ok) {
+      notify('無法啟用', '沒有取得通知權限,或瀏覽器封鎖了推播。請在網址列的權限設定中允許通知。');
+    }
   };
 
   const doExport = async () => {
@@ -484,7 +509,21 @@ const SettingsScreen: React.FC = () => {
             />
           </>
         ) : (
-          <Button label="中斷連接" variant="outline" onPress={disconnectGoogle} />
+          <>
+            <Button
+              label={pulling ? '同步中…' : '⬇ 從 Google 拉回變更'}
+              variant="outline"
+              onPress={() => void doPull()}
+              disabled={pulling}
+            />
+            <Text style={s.hint}>
+              把 Google 日曆上的行程(含別人寄來的邀請)拉進這裡。
+              {data.settings.googleLastPullAt
+                ? `上次同步:${new Date(data.settings.googleLastPullAt).toLocaleString()}`
+                : '尚未同步過。'}
+            </Text>
+            <Button label="中斷連接" variant="outline" onPress={disconnectGoogle} />
+          </>
         )}
         <Text style={s.hint}>
           連接後,行程開啟「同步到 Google 日曆」即自動同步;也可在 Google
@@ -532,6 +571,24 @@ const SettingsScreen: React.FC = () => {
             />
           ))}
         </View>
+
+        {/* 跨裝置推播:只有在共享空間裡才有意義(單機模式沒有「對方」) */}
+        {shared && (
+          <>
+            <View style={s.switchRow}>
+              <Text style={s.switchLabel}>跨裝置推播</Text>
+              <Switch
+                value={!!data.settings.crossDevicePush}
+                onValueChange={(v) => void togglePush(v)}
+                trackColor={{ true: colors.primary }}
+              />
+            </View>
+            <Text style={s.hint}>
+              對方修改共用行程時,即使這裡的 App 沒有開著也會收到通知。
+              {isPushSupported() ? '' : '(此裝置或瀏覽器不支援)'}
+            </Text>
+          </>
+        )}
 
         <Button label="發送測試通知" variant="outline" onPress={() => void sendTestNotification()} />
       </Card>

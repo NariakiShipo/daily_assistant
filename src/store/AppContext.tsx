@@ -23,6 +23,8 @@ import * as notif from '../services/notifications';
 import * as gcal from '../services/googleCalendar';
 import * as fb from '../services/firebaseSync';
 import * as auth from '../services/auth';
+import * as push from '../services/push';
+import { mergeGoogleEvents, syncSummary } from '../services/googleSync';
 import { isFirebaseConfigured } from '../config';
 
 interface AppContextValue {
@@ -61,6 +63,10 @@ interface AppContextValue {
   addCustomSymptom: (name: string) => void;
   /** 上課前幾分鐘提醒(null = 關閉) */
   setCourseRemindMinutes: (mins: number | null) => void;
+  /** 跨裝置推播(對方改動時即使 App 沒開也通知);回傳是否成功啟用 */
+  setCrossDevicePush: (on: boolean) => Promise<boolean>;
+  /** 從 Google 日曆拉回變更並合併;回傳結果摘要 */
+  pullFromGoogle: () => Promise<string>;
   /** 以備份檔的內容取代目前資料(共享模式下一併上傳雲端) */
   restoreData: (next: AppData) => Promise<void>;
   // users & settings
@@ -89,6 +95,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [authUser, setAuthUser] = useState<auth.AuthUser | null>(null);
   const loaded = useRef(false);
   const dataRef = useRef(data);
+  /** 這台裝置的識別碼(推播時用來略過自己);非同步取得,取得前為 undefined */
+  const deviceId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    void push.getDeviceId().then((id) => {
+      deviceId.current = id;
+    });
+  }, []);
   useEffect(() => {
     dataRef.current = data;
   });
@@ -215,6 +228,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     data.settings.courseRemindMinutes,
   ]);
 
+  /**
+   * 跨裝置推播的登記。
+   *
+   * 只有在共享空間裡才有意義——推播的目的是通知「對方」,單機模式沒有對方。
+   * 關閉或離開空間時要取消登記,否則伺服器會繼續往這台裝置送。
+   */
+  const pushEnabled = !!data.settings.crossDevicePush;
+  useEffect(() => {
+    if (!loaded.current || !shared || !spaceId) return;
+    if (pushEnabled) {
+      void push.registerForSpace(spaceId);
+    } else {
+      void push.unregisterForSpace(spaceId);
+    }
+  }, [pushEnabled, shared, spaceId]);
+
+  // 分頁在前景時收到的推播不會觸發 service worker,必須自己顯示
+  useEffect(() => {
+    if (!pushEnabled || !shared) return;
+    return push.listenForegroundPush();
+  }, [pushEnabled, shared]);
+
   // 啟動時檢查 Google OAuth token 是否仍有效
   useEffect(() => {
     if (!ready) return;
@@ -239,9 +274,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
+  /**
+   * 蓋上修改時間與修改者。衝突偵測靠這個時間戳判斷「我編輯期間對方有沒有動過」,
+   * 因此每一條寫入路徑都必須經過這裡,漏掉任何一條都會讓偵測失效。
+   */
+  const stamp = useCallback(
+    (ev: CalendarEvent): CalendarEvent => ({
+      ...ev,
+      updatedAt: Date.now(),
+      updatedBy: ev.updatedBy ?? ev.createdBy,
+      updatedByDevice: deviceId.current,
+    }),
+    []
+  );
+
   const addEvent = useCallback(
     async (ev: CalendarEvent) => {
-      const synced = await trySyncGoogle(ev);
+      const synced = await trySyncGoogle(stamp(ev));
       setData((d) => ({ ...d, events: [...d.events, synced] }));
       if (shared && spaceId) {
         void fb.saveEventDoc(spaceId, synced);
@@ -249,12 +298,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         void notif.notifyEventChange(synced, userName(ev.createdBy), '新增');
       }
     },
-    [trySyncGoogle, shared, spaceId, userName]
+    [trySyncGoogle, stamp, shared, spaceId, userName]
   );
 
   const updateEvent = useCallback(
     async (ev: CalendarEvent) => {
-      const synced = await trySyncGoogle(ev);
+      const synced = await trySyncGoogle(stamp(ev));
       setData((d) => ({ ...d, events: d.events.map((e) => (e.id === ev.id ? synced : e)) }));
       if (shared && spaceId) {
         void fb.saveEventDoc(spaceId, synced);
@@ -262,7 +311,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         void notif.notifyEventChange(synced, userName(ev.createdBy), '修改');
       }
     },
-    [trySyncGoogle, shared, spaceId, userName]
+    [trySyncGoogle, stamp, shared, spaceId, userName]
   );
 
   const deleteEvent = useCallback(
@@ -406,6 +455,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setData((d) => ({ ...d, settings: { ...d.settings, courseRemindMinutes: mins } }));
   }, []);
 
+  const setCrossDevicePush = useCallback(
+    async (on: boolean): Promise<boolean> => {
+      if (!on) {
+        if (spaceId) await push.unregisterForSpace(spaceId);
+        setData((d) => ({ ...d, settings: { ...d.settings, crossDevicePush: false } }));
+        return true;
+      }
+      // 先確認真的拿得到 token 再記錄設定,否則設定顯示已開啟卻收不到推播
+      if (!spaceId) return false;
+      const ok = await push.registerForSpace(spaceId);
+      if (ok) setData((d) => ({ ...d, settings: { ...d.settings, crossDevicePush: true } }));
+      return ok;
+    },
+    [spaceId]
+  );
+
   const updateUser = useCallback(
     (u: UserProfile) => {
       setData((d) => {
@@ -472,6 +537,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setData((d) => ({ ...d, settings: { ...d.settings, spaceId: null } }));
   }, []);
 
+  /**
+   * 從 Google 日曆拉回變更。
+   *
+   * 有 syncToken 走增量;Google 回 410(token 過期)時自動退回完整同步重來一次,
+   * 否則使用者會卡在「同步不動」而不知道原因。
+   */
+  const pullFromGoogle = useCallback(async (): Promise<string> => {
+    // 先取一份快照:後面要拿它跟合併結果比對,不能等 setData 之後再讀
+    // dataRef(它由 effect 更新,時機依賴 React 的排程,不該當作同步值)
+    const snapshot = dataRef.current;
+    const owner = snapshot.users.find((u) => u.isPrimary)?.id ?? 'u1';
+
+    let pull = await gcal.pullEvents(snapshot.settings.googleSyncToken ?? null);
+    if (pull.tokenExpired) pull = await gcal.pullEvents(null);
+
+    const result = mergeGoogleEvents(snapshot.events, pull.events, owner);
+
+    setData((d) => ({
+      ...d,
+      events: result.events,
+      settings: {
+        ...d.settings,
+        googleSyncToken: pull.nextSyncToken ?? d.settings.googleSyncToken ?? null,
+        googleLastPullAt: Date.now(),
+      },
+    }));
+
+    // 共享模式下把合併結果同步給對方(未變動的項目是同一個物件參考,直接濾掉)
+    if (shared && spaceId) {
+      const beforeById = new Map(snapshot.events.map((e) => [e.id, e]));
+      for (const ev of result.events) {
+        if (beforeById.get(ev.id) !== ev) void fb.saveEventDoc(spaceId, ev);
+      }
+      const survivingIds = new Set(result.events.map((e) => e.id));
+      for (const e of snapshot.events) {
+        if (!survivingIds.has(e.id)) void fb.deleteEventDoc(spaceId, e.id);
+      }
+    }
+
+    return syncSummary(result);
+  }, [shared, spaceId]);
+
   const restoreData = useCallback(
     async (next: AppData) => {
       // 保留目前的共享空間:備份不帶配對碼,匯入不該把裝置踢出空間
@@ -526,6 +633,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     removePeriodFieldName,
     addCustomSymptom,
     setCourseRemindMinutes,
+    setCrossDevicePush,
+    pullFromGoogle,
     restoreData,
     updateUser,
     setNotificationsEnabled,

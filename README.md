@@ -16,6 +16,12 @@
   - 完成狀態、刪除都可以「只針對這一次」,不影響其他次數
   - 每月重複遇到沒有該日期的月份(如 1/31 的 2 月)會自動跳過,不會往前漂移
 - 行程可標記「同步到 Google 日曆」(見下方接入說明)
+- **雙向同步**:設定頁的「⬇ 從 Google 拉回變更」把 Google 上的行程(含別人寄來的邀請)
+  拉進來。用 Google 的 `syncToken` 做增量同步,token 過期(410)時自動退回完整同步
+  - 衝突規則:比較兩邊的修改時間,新的贏;本機較新時保留本機並回報筆數
+  - 合併時保留 Google 沒有對應的本機欄位(標籤、提醒、優先順序、逐次完成狀態)
+  - 重複行程交給 Google 展開成實例(`singleEvents=true`)再匯入,不自行解析 RRULE——
+    Google 的 RRULE 涵蓋範圍遠大於本專案的 Recurrence 模型,硬對應會在邊角情況安靜出錯
 
 ### 🌸 經期紀錄
 - 一鍵記錄經期開始/結束,可選「由誰記錄」(伴侶可協助)
@@ -40,6 +46,21 @@
 - **上課提醒**:設定頁可選課前 10 / 20 / 30 分鐘(排未來一週)
 - 行程新增/修改/刪除時發出通知
 - 設定頁可開關並發送測試通知
+
+- **跨裝置推播**(共享空間 + 網頁版):對方修改共用行程時,即使這邊 App 沒開也會通知
+
+跨裝置推播由 Functions 的 `onEventWritten` 觸發器發送,設定步驟:
+1. Firebase Console → 專案設定 → Cloud Messaging → 網頁推送憑證 → 產生金鑰組
+2. 把公開金鑰填入 `.env` 的 `EXPO_PUBLIC_FIREBASE_VAPID_KEY`
+3. 設定頁開啟「跨裝置推播」
+
+刻意不推播的情況(邏輯在 `functions/pushMessage.js`,有單元測試):批次重寫
+(登入/加入空間時的 uploadLocal,否則對方會被幾十則推播洗版)、內容沒有實際變更、
+以及改動來源那台裝置自己。
+
+手機版目前不支援跨裝置推播:Android 需要 `google-services.json`,
+iOS 需要付費 Apple Developer 會員(免費 Apple ID 簽名不支援推播 entitlement,
+見 `plugins/withoutPushEntitlement.js`)。
 
 手機版用 expo-notifications 走系統排程,App 關掉也會響。
 網頁版用 Web Notification API + 計時器,**只在分頁開著時有效**(設定頁有提示)。

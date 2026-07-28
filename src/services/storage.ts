@@ -20,6 +20,7 @@ export const defaultData: AppData = {
     customTags: [],
     periodFieldNames: [],
     customSymptoms: [],
+    crossDevicePush: false,
   },
 };
 

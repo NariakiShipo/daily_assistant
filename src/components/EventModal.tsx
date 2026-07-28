@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
@@ -34,6 +34,7 @@ import { confirmDialog, notify } from '../utils/dialog';
 import { useApp } from '../store/AppContext';
 import { findEventClashes } from '../services/conflicts';
 import { EventInstance, excludeOccurrence, findSeries, isInstance } from '../services/recurrence';
+import { detectConflict, stampFrom } from '../services/editConflict';
 import { Button, Chip } from './ui';
 import MiniCalendar from './MiniCalendar';
 import TimeField from './TimeField';
@@ -75,6 +76,13 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
   const series = event ? (findSeries(data.events, event) ?? event) : null;
   const editingOccurrence = !!event && isInstance(event);
 
+  /**
+   * 開啟編輯視窗那一刻的版本時間戳。存檔時拿它跟 store 裡的最新版比對,
+   * 就知道對方有沒有在我編輯期間動過同一筆。用 ref 是因為它不該觸發重繪,
+   * 而且必須是「開啟當下」的快照——Firestore 訂閱會即時更新 data.events。
+   */
+  const baselineUpdatedAt = useRef<number | undefined>(undefined);
+
   const toggleTag = (t: string) =>
     setTags((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
 
@@ -113,6 +121,8 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
   useEffect(() => {
     if (!visible) return;
     setDateMode('start');
+    // 記下開啟當下的版本,之後才比對得出「編輯期間對方改了什麼」
+    baselineUpdatedAt.current = series?.updatedAt;
     if (series) {
       setTitle(series.title);
       setDate(series.date);
@@ -227,22 +237,57 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
       remindMinutesBefore: remind ?? undefined,
     };
 
-    const persist = async () => {
-      if (series) await updateEvent(ev);
-      else await addEvent(ev);
+    const nameOfUser = (id: string) => data.users.find((u) => u.id === id)?.name ?? '?';
+
+    const write = async (toSave: CalendarEvent) => {
+      if (series) await updateEvent(toSave);
+      else await addEvent(toSave);
       onClose();
+    };
+
+    /**
+     * 存檔前檢查對方有沒有在我編輯期間動過同一筆。
+     * Firestore 是 last-write-wins,不檢查的話對方的修改會被靜默蓋掉。
+     */
+    const persist = async () => {
+      const current = series ? data.events.find((e) => e.id === series.id) : undefined;
+      const conflict = detectConflict(ev, baselineUpdatedAt.current, current, nameOfUser);
+
+      if (conflict.kind === 'none') return write(ev);
+
+      if (conflict.kind === 'deleted') {
+        return confirmDialog(
+          '對方已刪除這個行程',
+          `你編輯的期間,「${ev.title}」已被刪除。\n\n要以你的版本重新建立嗎?`,
+          () => void write(ev),
+          { confirmLabel: '重新建立' }
+        );
+      }
+
+      const lines = conflict.diffs
+        .slice(0, 5)
+        .map((d) => `・${d.label}:對方「${d.theirs}」/ 你「${d.mine}」`);
+      const more = conflict.diffs.length > 5 ? `\n…共 ${conflict.diffs.length} 處不同` : '';
+      const who = conflict.theirs?.updatedBy ? nameOfUser(conflict.theirs.updatedBy) : '對方';
+      confirmDialog(
+        '對方也改了這個行程',
+        `${who}在你編輯期間改過「${ev.title}」:\n\n${lines.join('\n')}${more}\n\n` +
+          '要用你的版本覆蓋嗎?選「保留對方的」則放棄你這次的修改。',
+        // 覆蓋時帶上對方的時間戳,否則下次存檔又會被判定成衝突
+        () => void write(stampFrom(ev, conflict.theirs)),
+        { confirmLabel: '用我的覆蓋', cancelLabel: '保留對方的', destructive: true }
+      );
     };
 
     // 與課表時段重疊 → 提醒(仍可堅持儲存)
     const clashes = findEventClashes(ev, data.courses, data.semesters);
     if (clashes.length) {
-      const nameOf = (id: string) => data.users.find((u) => u.id === id)?.name ?? '?';
       const lines = clashes
         .slice(0, 3)
         .map(
           (c) =>
             `${formatDateZh(c.date)} 「${c.slot.course.title}」` +
-            `${minutesToTime(c.slot.startMin)}–${minutesToTime(c.slot.endMin)}(${nameOf(c.ownerId)}的課)`
+            `${minutesToTime(c.slot.startMin)}–${minutesToTime(c.slot.endMin)}(${nameOfUser(c.ownerId)}的課)`
         );
       const more = clashes.length > 3 ? `\n…共 ${clashes.length} 處重疊` : '';
       confirmDialog(
