@@ -24,6 +24,8 @@ import {
   onSnapshot,
   writeBatch,
   serverTimestamp,
+  arrayUnion,
+  deleteField,
 } from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured } from '../config';
 import { CalendarEvent, CourseEntry, PeriodRecord, SemesterMeta, UserProfile } from '../types';
@@ -245,4 +247,40 @@ export async function saveUsers(code: string, users: UserProfile[]): Promise<voi
   const d = getDb();
   if (!d) return;
   await setDoc(doc(d, 'spaces', code), { users }, { merge: true });
+}
+
+/**
+ * 空間的成員名單(firestore.rules 的 members 欄位)。
+ *
+ * 有 members 的空間只有名單內的登入帳號能存取,配對碼不再是通行證。
+ * 這是使用者主動「鎖定」才會發生的事,不會自動升級——
+ * 自動升級會把還沒有帳號的伴侶直接鎖在門外。
+ */
+export async function getSpaceMembers(code: string): Promise<string[] | null> {
+  const d = getDb();
+  if (!d) return null;
+  const snap = await getDoc(doc(d, 'spaces', code));
+  const members = snap.data()?.members as string[] | undefined;
+  return members ?? null;
+}
+
+/** 鎖定空間:把自己設為第一位成員,之後只有名單內的帳號能存取 */
+export async function lockSpace(code: string, uid: string): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code), { members: [uid] }, { merge: true });
+}
+
+/** 把另一個帳號加進成員名單 */
+export async function addSpaceMember(code: string, uid: string): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code), { members: arrayUnion(uid) }, { merge: true });
+}
+
+/** 解除鎖定:移除 members 欄位,回到配對碼存取模式 */
+export async function unlockSpace(code: string): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code), { members: deleteField() }, { merge: true });
 }
