@@ -72,7 +72,8 @@ iOS 對已排程的本機通知有 64 則上限,因此行程提醒只排未來 3
 ```bash
 npm install        # 若曾安裝失敗,先 rm -rf node_modules 再執行
 npm start          # 掃 QR code 用 Expo Go 開啟
-npm run web        # 瀏覽器執行(通知功能僅手機支援)
+npm run web        # 瀏覽器執行(開發用)
+npm run build:web  # 建置網頁版(含 PWA 標籤注入;部署前用這個)
 npm test           # 單元測試(純函式:日期、經期預測、課表衝突、重複展開)
 npm run typecheck  # 型別檢查
 ```
@@ -163,8 +164,25 @@ Firestore `googleTokens/{uid}`(規則擋死前端存取),之後 access token 過
 還原時不會把裝置拉進備份來源的共享空間。
 
 ### 尚未涵蓋
-- 跨裝置推播(對方手機鎖屏也收到):需 development build + FCM + Cloud
-  Functions 監聽 Firestore 變更發送 Expo Push。目前 App 開著時會即時收到本機通知。
+- 手機版的跨裝置推播:Android 需 `google-services.json` + 重新 prebuild;
+  iOS 需付費 Apple Developer 會員(見上方「🔔 通知」)。網頁版已支援。
+
+## PWA(加到主畫面)
+
+網頁版可以「加到主畫面」當成獨立 App 使用。圖示與 manifest 的產生方式:
+
+```bash
+npm run icons      # 從 assets/icon.png 產生 public/icons/*(換 icon 時才需要)
+npm run build:web  # 匯出 + 注入 PWA 標籤
+```
+
+**部署一定要用 `npm run build:web`,不要直接跑 `expo export`。** Expo 的網頁匯出
+只會產出一個 48x48 的 `favicon.ico`,而且不提供客製 `index.html` head 的方式
+(非 expo-router 專案)。少了 `scripts/inject-pwa-tags.mjs` 這步,瀏覽器找不到
+manifest 的 icons,只能把 48px 放大到約 192px —— 主畫面圖示就會糊掉。
+
+圖示規格:192/512 一般用途、512 maskable(Android 會套遮罩,圖案縮在安全區內)、
+180 apple-touch-icon(iOS 沒有 manifest 支援,靠 `<link rel="apple-touch-icon">`)。
 
 ## 結構
 
