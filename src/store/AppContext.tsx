@@ -271,6 +271,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!ready) return;
     void (async () => {
       const ok = await gcal.isConnectedAsync();
+      // null = 後端這次問不到(冷啟動、網路)。維持現狀,別把已連接寫成斷線。
+      if (ok === null) return;
       setData((d) =>
         d.settings.googleConnected === ok
           ? d
