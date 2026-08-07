@@ -261,7 +261,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return push.listenForegroundPush();
   }, [pushEnabled, shared]);
 
-  // 啟動時檢查 Google OAuth token 是否仍有效
+  // 啟動時檢查 Google OAuth token 是否仍有效。
+  //
+  // authUser 必須列入 deps:伺服器代管的授權要帶登入身分才換得到 access token,
+  // 而 Firebase 還原登入狀態遠慢於 loadData()。只看 ready 的話,登入還沒還原就判定
+  // 「沒連接」,還被自動持久化把 false 寫回本機,之後也不會再重查——
+  // 這就是永久連接仍舊一小時斷線的原因。登入/登出時重查也順便由這裡涵蓋。
   useEffect(() => {
     if (!ready) return;
     void (async () => {
@@ -273,7 +278,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready]);
+  }, [ready, authUser]);
 
   const trySyncGoogle = useCallback(async (ev: CalendarEvent): Promise<CalendarEvent> => {
     if (!ev.syncToGoogle) return ev;

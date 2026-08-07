@@ -63,13 +63,19 @@ async function loadTokens(): Promise<StoredTokens | null> {
  * 存入日曆 access token。
  * - Firebase Google 登入順手拿到的 token:無 refresh token,約 1 小時後過期(暫時連接)
  * - 「永久連接」流程換到的 token:serverManaged = true,過期會自動向後端續期
+ *
+ * serverManaged 未指定時沿用既有標記。Google 登入拿到的雖然是一小時的臨時 token,
+ * 但伺服器上的 refresh token 還在,不能因此把永久連接降級成暫時——否則設定頁會顯示
+ * 「暫時」並引導使用者再登入一次,一小時後再斷,永遠繞不出這個圈。
+ * 明確傳 false(永久連接流程確認 Google 沒發 refresh token)才會真的清掉標記。
  */
 export async function storeCalendarToken(
   accessToken: string,
   expiresIn?: number,
   serverManaged?: boolean
 ): Promise<void> {
-  await saveTokens(accessToken, expiresIn, undefined, serverManaged);
+  const managed = serverManaged ?? (await loadTokens())?.serverManaged;
+  await saveTokens(accessToken, expiresIn, undefined, managed);
 }
 
 /** 是否為伺服器代管的永久連接(設定頁顯示用) */

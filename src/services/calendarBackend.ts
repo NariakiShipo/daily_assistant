@@ -7,7 +7,7 @@
  */
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { getFirebaseApp } from './firebaseSync';
-import { getCurrentUser } from './auth';
+import { getCurrentUser, waitForAuthReady } from './auth';
 
 /** 與 functions/index.js 的 REGION 一致 */
 const REGION = 'asia-east1';
@@ -43,6 +43,10 @@ let inflight: Promise<ServerToken | null> | null = null;
 
 /** 向伺服器要新的 access token;未登入、未連接或後端未部署時回傳 null */
 export async function fetchServerToken(): Promise<ServerToken | null> {
+  // 一定要等登入狀態還原完:callable 得帶 ID token,而 Firebase 還原 session 比
+  // App 啟動慢得多。少了這一步,開頁面時 getCurrentUser() 還是 null,永久連接會被
+  // 誤判成斷線——本機 token 過期後每次開啟都必中,正是「一小時後就斷」的來源。
+  await waitForAuthReady();
   if (!getCurrentUser()) return null;
   if (!inflight) {
     inflight = (async () => {
