@@ -262,6 +262,19 @@ export interface AppSettings {
   googleSyncToken?: string | null;
   /** 上次從 Google 拉取的時間(epoch ms),顯示用 */
   googleLastPullAt?: number | null;
+  /** 當月花費上限(自己 / 伴侶各一個,雙人不設);只顯示已用與剩餘,不做任何提醒 */
+  budget?: ExpenseBudget;
+  /** 「雙人」支出怎麼算進個人統計 */
+  sharedSplit?: SharedSplit;
+  /** 記一筆時的金額鍵盤 */
+  expenseKeypad?: ExpenseKeypad;
+  /** 記過的備註,記一筆時當成常用備註小標籤(最近的排前面) */
+  recentExpenseNotes?: string[];
+  /**
+   * 使用者手動刪掉的固定支出月份,格式 '<recurringId>@YYYY-MM-DD'。
+   * 沒有這份清單的話,下次開 App 時自動補帳會把刪掉的那一筆又補回來。
+   */
+  recurringSkips?: string[];
 }
 
 export interface AppData {
@@ -271,5 +284,156 @@ export interface AppData {
   courses: CourseEntry[];
   /** 已知的學期(匯入課表時建立) */
   semesters: SemesterMeta[];
+  /** 帳目 */
+  expenses: Expense[];
+  /** 記帳分類(預設 + 自訂) */
+  expenseCategories: ExpenseCategory[];
+  /** 固定支出的範本 */
+  recurringExpenses: RecurringExpense[];
   settings: AppSettings;
 }
+
+/* ───────────────────────── 記帳 ───────────────────────── */
+
+/** 一筆帳是支出還是收入 */
+export type ExpenseKind = 'expense' | 'income';
+
+/** 這筆帳算誰的:自己 / 伴侶 / 雙人共同 */
+export type ExpenseWho = 'self' | 'partner' | 'both';
+
+/** 付款方式 */
+export type PaymentMethod = 'cash' | 'card' | 'transfer';
+
+export const PAYMENT_LABELS: Record<PaymentMethod, string> = {
+  cash: '現金',
+  card: '卡',
+  transfer: '轉帳',
+};
+
+export const PAYMENT_OPTIONS = (['cash', 'card', 'transfer'] as PaymentMethod[]).map((value) => ({
+  value,
+  label: PAYMENT_LABELS[value],
+}));
+
+/**
+ * 「雙人」支出怎麼算進個人統計。
+ *
+ * separate = 獨立一類:只出現在「雙人」,不計入任何人的上限。
+ * half     = 各算一半:一半分別加進自己與伴侶的統計與上限。
+ */
+export type SharedSplit = 'separate' | 'half';
+
+/** 金額輸入用哪種鍵盤 */
+export type ExpenseKeypad = 'app' | 'system';
+
+/** 一筆帳目 */
+export interface Expense {
+  id: string;
+  /** 正數;支出或收入由 kind 決定,不用負數表示支出 */
+  amount: number;
+  kind: ExpenseKind;
+  who: ExpenseWho;
+  /** ExpenseCategory.id */
+  categoryId: string;
+  /** YYYY-MM-DD */
+  date: string;
+  note?: string;
+  payment: PaymentMethod;
+  /** 收據照片(本機 file:// 或 data:) */
+  receiptUri?: string;
+  /** 由固定支出自動產生時,來源 RecurringExpense.id */
+  recurringId?: string;
+  createdBy: string;
+  updatedAt?: number;
+  updatedBy?: string;
+  /** 最後由哪台裝置修改;與行程同樣用來略過自己的推播 */
+  updatedByDevice?: string;
+}
+
+/**
+ * 記帳分類(= 使用者說的「標籤」)。
+ *
+ * 預設分類只能隱藏不能刪除,否則舊帳目會失去分類;
+ * 自訂分類可改名、換圖、刪除(刪除時要先把舊帳目移到別的分類)。
+ */
+export interface ExpenseCategory {
+  id: string;
+  name: string;
+  kind: ExpenseKind;
+  /** 內建線條圖示的鍵(見 components/Icon) */
+  icon?: string;
+  /** 使用者選的 Emoji(與 icon、imageUri 三選一) */
+  emoji?: string;
+  /** 使用者上傳並裁成圓形的圖片 */
+  imageUri?: string;
+  /** 圓餅圖與排行用的顏色 */
+  color: string;
+  /** 預設分類:不可刪除,只能隱藏 */
+  builtin: boolean;
+  /** 隱藏後不再出現在記一筆的分類格,但舊帳目仍看得到分類 */
+  hidden?: boolean;
+  /** 顯示順序(長按拖曳調整) */
+  order: number;
+}
+
+/** 固定支出:到期當天自動新增一筆真實帳目,之後可單獨修改或刪除 */
+export interface RecurringExpense {
+  id: string;
+  name: string;
+  amount: number;
+  kind: ExpenseKind;
+  who: ExpenseWho;
+  categoryId: string;
+  payment: PaymentMethod;
+  /** 每月幾號記一筆(1–31;超過當月天數時落在月底) */
+  dayOfMonth: number;
+  /** 從哪個月開始自動記(YYYY-MM);未設 = 建立當月 */
+  startMonth?: string;
+}
+
+/** 當月花費上限:自己與伴侶各一個,雙人不設 */
+export interface ExpenseBudget {
+  self?: number;
+  partner?: number;
+}
+
+/** 記帳的預設分類顏色(沿用 theme 的 tagPalette 八色與成員色) */
+export const EXPENSE_CATEGORY_COLORS = [
+  '#E8638C', '#4A90D9', '#B85FA8', '#E5A33D', '#7C6BD6',
+  '#D9534F', '#5C7FD9', '#2BAFA0', '#46A35E', '#D97B4A',
+  '#8A8F4A', '#3FA37A',
+];
+
+/**
+ * 預設分類。
+ *
+ * 支出 10 個是使用者指定的清單;收入 4 個是最小可用集合,
+ * 兩邊都 builtin(可隱藏、不可刪),自訂分類從 order 100 起跳。
+ */
+export const DEFAULT_EXPENSE_CATEGORIES: ExpenseCategory[] = [
+  { id: 'c-food', name: '飲食', kind: 'expense', icon: 'food', color: '#E8638C', builtin: true, order: 0 },
+  { id: 'c-transit', name: '交通', kind: 'expense', icon: 'transit', color: '#4A90D9', builtin: true, order: 1 },
+  { id: 'c-shopping', name: '購物', kind: 'expense', icon: 'shopping', color: '#B85FA8', builtin: true, order: 2 },
+  { id: 'c-fun', name: '娛樂', kind: 'expense', icon: 'fun', color: '#E5A33D', builtin: true, order: 3 },
+  { id: 'c-home', name: '居住', kind: 'expense', icon: 'home', color: '#7C6BD6', builtin: true, order: 4 },
+  { id: 'c-health', name: '醫療', kind: 'expense', icon: 'health', color: '#D9534F', builtin: true, order: 5 },
+  { id: 'c-edu', name: '教育', kind: 'expense', icon: 'edu', color: '#5C7FD9', builtin: true, order: 6 },
+  { id: 'c-daily', name: '日用品', kind: 'expense', icon: 'daily', color: '#2BAFA0', builtin: true, order: 7 },
+  { id: 'c-phone', name: '通訊', kind: 'expense', icon: 'phone', color: '#46A35E', builtin: true, order: 8 },
+  { id: 'c-pet', name: '寵物', kind: 'expense', icon: 'pet', color: '#D97B4A', builtin: true, order: 9 },
+  { id: 'c-salary', name: '薪資', kind: 'income', icon: 'salary', color: '#3FA37A', builtin: true, order: 0 },
+  { id: 'c-bonus', name: '獎金', kind: 'income', icon: 'bonus', color: '#E5A33D', builtin: true, order: 1 },
+  { id: 'c-invest', name: '投資', kind: 'income', icon: 'invest', color: '#4A90D9', builtin: true, order: 2 },
+  { id: 'c-other-income', name: '其他', kind: 'income', icon: 'more', color: '#8A8F4A', builtin: true, order: 3 },
+];
+
+/** 找不到分類時的替身:舊帳目的分類被刪掉也不會讓畫面崩掉 */
+export const UNKNOWN_CATEGORY: ExpenseCategory = {
+  id: '',
+  name: '未分類',
+  kind: 'expense',
+  icon: 'more',
+  color: '#C9B8C0',
+  builtin: true,
+  order: 999,
+};

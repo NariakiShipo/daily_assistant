@@ -7,7 +7,17 @@
  * 匯入時逐筆驗證而非直接信任 JSON:壞掉的備份檔如果原樣塞進 state,
  * 畫面會在讀取時整個炸掉,而且錯誤很難追。
  */
-import { AppData, CalendarEvent, CourseEntry, PeriodRecord, SemesterMeta, UserProfile } from '../types';
+import {
+  AppData,
+  CalendarEvent,
+  CourseEntry,
+  Expense,
+  ExpenseCategory,
+  PeriodRecord,
+  RecurringExpense,
+  SemesterMeta,
+  UserProfile,
+} from '../types';
 import { defaultData } from './storage';
 
 /** 備份檔格式版本;之後改資料結構時用來判斷要不要轉檔 */
@@ -81,6 +91,50 @@ function validSemesters(raw: unknown): SemesterMeta[] {
   );
 }
 
+function validExpenses(raw: unknown): Expense[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (e): e is Expense =>
+      isObj(e) &&
+      str(e.id) &&
+      typeof e.amount === 'number' &&
+      Number.isFinite(e.amount) &&
+      str(e.date) &&
+      str(e.categoryId) &&
+      (e.kind === 'expense' || e.kind === 'income')
+  );
+}
+
+/**
+ * 分類跟其他區塊不同:空清單不是「沒有資料」而是「記帳整個不能用」,
+ * 所以壞掉或缺少時退回預設分類,而不是留空。
+ */
+function validCategories(raw: unknown): ExpenseCategory[] {
+  if (!Array.isArray(raw)) return defaultData.expenseCategories;
+  const cats = raw.filter(
+    (c): c is ExpenseCategory =>
+      isObj(c) &&
+      str(c.id) &&
+      str(c.name) &&
+      str(c.color) &&
+      (c.kind === 'expense' || c.kind === 'income')
+  );
+  return cats.length ? cats : defaultData.expenseCategories;
+}
+
+function validRecurring(raw: unknown): RecurringExpense[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (r): r is RecurringExpense =>
+      isObj(r) &&
+      str(r.id) &&
+      str(r.name) &&
+      typeof r.amount === 'number' &&
+      typeof r.dayOfMonth === 'number' &&
+      str(r.categoryId)
+  );
+}
+
 /**
  * 成員是唯一不能為空的區塊:零成員會讓行程沒有擁有者、經期沒有記錄者,
  * 整個畫面都失去依據,所以任何情況下都至少退回預設成員。
@@ -134,6 +188,9 @@ export function parseBackup(json: string): ParseResult {
     periods: validPeriods(d.periods),
     courses: validCourses(d.courses),
     semesters: validSemesters(d.semesters),
+    expenses: validExpenses(d.expenses),
+    expenseCategories: validCategories(d.expenseCategories),
+    recurringExpenses: validRecurring(d.recurringExpenses),
     settings: {
       ...defaultData.settings,
       ...(isObj(d.settings) ? d.settings : {}),
@@ -145,6 +202,8 @@ export function parseBackup(json: string): ParseResult {
   return {
     ok: true,
     data,
-    message: `行程 ${data.events.length} 筆 · 經期 ${data.periods.length} 筆 · 課程 ${data.courses.length} 筆`,
+    message:
+      `行程 ${data.events.length} 筆 · 經期 ${data.periods.length} 筆 · ` +
+      `課程 ${data.courses.length} 筆 · 帳目 ${data.expenses.length} 筆`,
   };
 }
