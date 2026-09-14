@@ -11,8 +11,14 @@ import {
   AppData,
   CalendarEvent,
   CourseEntry,
+  Expense,
+  ExpenseBudget,
+  ExpenseCategory,
+  ExpenseKeypad,
   PeriodRecord,
+  RecurringExpense,
   SemesterMeta,
+  SharedSplit,
   UserProfile,
   CyclePrediction,
   semesterOrder,
@@ -27,6 +33,11 @@ import * as auth from '../services/auth';
 import * as push from '../services/push';
 import { mergeGoogleEvents, syncSummary } from '../services/googleSync';
 import { isFirebaseConfigured } from '../config';
+import { pendingRecurring } from '../services/expenses';
+import { todayKey, uid } from '../utils/date';
+
+/** 記過的備註最多留這麼多個,再多也塞不進記一筆那一列 */
+const MAX_RECENT_NOTES = 8;
 
 interface AppContextValue {
   data: AppData;
@@ -68,6 +79,29 @@ interface AppContextValue {
   setCourseRemindMinutes: (mins: number | null) => void;
   /** 跨裝置推播(對方改動時即使 App 沒開也通知);回傳是否成功啟用 */
   setCrossDevicePush: (on: boolean) => Promise<boolean>;
+  // expenses
+  addExpense: (e: Expense) => void;
+  updateExpense: (e: Expense) => void;
+  /** 刪除帳目;遠端刪除失敗會還原本機並拋出錯誤 */
+  deleteExpense: (id: string) => Promise<void>;
+  /** 新增或更新一個記帳分類 */
+  saveExpenseCategory: (c: ExpenseCategory) => void;
+  /**
+   * 刪除自訂分類,並把它底下的帳目改到 moveToId。
+   * 預設分類不可刪(呼叫端應改用 setCategoryHidden)。
+   */
+  deleteExpenseCategory: (id: string, moveToId: string) => void;
+  /** 隱藏 / 取消隱藏分類(預設分類唯一的「移除」方式) */
+  setCategoryHidden: (id: string, hidden: boolean) => void;
+  /** 依新順序重排分類(長按拖曳後呼叫) */
+  reorderExpenseCategories: (kind: 'expense' | 'income', orderedIds: string[]) => void;
+  // 固定支出
+  saveRecurringExpense: (r: RecurringExpense) => void;
+  deleteRecurringExpense: (id: string) => void;
+  // 記帳設定
+  setBudget: (budget: ExpenseBudget) => void;
+  setSharedSplit: (split: SharedSplit) => void;
+  setExpenseKeypad: (keypad: ExpenseKeypad) => void;
   /** 從 Google 日曆拉回變更並合併;回傳結果摘要 */
   pullFromGoogle: () => Promise<string>;
   /** 以備份檔的內容取代目前資料(共享模式下一併上傳雲端) */
@@ -147,6 +181,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       onPeriods: (periods) => setData((d) => ({ ...d, periods })),
       onCourses: (courses) => setData((d) => ({ ...d, courses })),
       onSemesters: (semesters) => setData((d) => ({ ...d, semesters })),
+      onExpenses: (expenses) => setData((d) => ({ ...d, expenses })),
+      onExpenseCategories: (expenseCategories) => setData((d) => ({ ...d, expenseCategories })),
+      onRecurringExpenses: (recurringExpenses) => setData((d) => ({ ...d, recurringExpenses })),
     });
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -501,6 +538,235 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   }, []);
 
+  /* ───────────────────────── 記帳 ───────────────────────── */
+
+  /**
+   * 蓋上修改時間。帳目清單依 updatedAt 排序(同一天記的好幾筆要「新的在上面」),
+   * 所以每條寫入路徑都得經過這裡,跟行程的 stamp 同樣道理。
+   */
+  const stampExpense = useCallback(
+    (e: Expense): Expense => ({
+      ...e,
+      updatedAt: Date.now(),
+      updatedBy: e.updatedBy ?? e.createdBy,
+      updatedByDevice: deviceId.current,
+    }),
+    []
+  );
+
+  /** 記過的備註存起來,下次記一筆可以直接點(最近的排最前面,重複的往前提) */
+  const rememberNote = useCallback((note: string | undefined) => {
+    const trimmed = note?.trim();
+    if (!trimmed) return;
+    setData((d) => {
+      const rest = (d.settings.recentExpenseNotes ?? []).filter((n) => n !== trimmed);
+      return {
+        ...d,
+        settings: {
+          ...d.settings,
+          recentExpenseNotes: [trimmed, ...rest].slice(0, MAX_RECENT_NOTES),
+        },
+      };
+    });
+  }, []);
+
+  const addExpense = useCallback(
+    (e: Expense) => {
+      const stamped = stampExpense(e);
+      setData((d) => ({ ...d, expenses: [...d.expenses, stamped] }));
+      rememberNote(stamped.note);
+      if (shared && spaceId) void fb.saveExpenseDoc(spaceId, stamped);
+    },
+    [stampExpense, rememberNote, shared, spaceId]
+  );
+
+  const updateExpense = useCallback(
+    (e: Expense) => {
+      const stamped = stampExpense(e);
+      setData((d) => ({
+        ...d,
+        expenses: d.expenses.map((x) => (x.id === e.id ? stamped : x)),
+      }));
+      rememberNote(stamped.note);
+      if (shared && spaceId) void fb.saveExpenseDoc(spaceId, stamped);
+    },
+    [stampExpense, rememberNote, shared, spaceId]
+  );
+
+  const deleteExpense = useCallback(
+    async (id: string) => {
+      const removed = dataRef.current.expenses.find((e) => e.id === id);
+      setData((d) => {
+        /*
+         * 刪掉自動記的那一筆時,要一併記下「這個月不用再補」。
+         * 否則下次開 App,pendingRecurring 看不到那筆帳,就會當成還沒補而再生一次,
+         * 使用者會覺得這筆帳刪不掉。
+         */
+        const skip = removed?.recurringId ? `${removed.recurringId}@${removed.date}` : null;
+        const skips = d.settings.recurringSkips ?? [];
+        return {
+          ...d,
+          expenses: d.expenses.filter((e) => e.id !== id),
+          settings:
+            skip && !skips.includes(skip)
+              ? { ...d.settings, recurringSkips: [...skips, skip] }
+              : d.settings,
+        };
+      });
+      if (!(shared && spaceId)) return;
+      try {
+        await fb.deleteExpenseDoc(spaceId, id);
+      } catch (e) {
+        // 遠端沒刪掉就放回來,否則訂閱一推回來就像「刪掉又自己跑回來」
+        if (removed) {
+          setData((d) =>
+            d.expenses.some((x) => x.id === id) ? d : { ...d, expenses: [...d.expenses, removed] }
+          );
+        }
+        throw new Error(syncErrorMessage('刪除帳目', e));
+      }
+    },
+    [shared, spaceId]
+  );
+
+  const saveExpenseCategory = useCallback(
+    (c: ExpenseCategory) => {
+      setData((d) => {
+        const exists = d.expenseCategories.some((x) => x.id === c.id);
+        const expenseCategories = exists
+          ? d.expenseCategories.map((x) => (x.id === c.id ? c : x))
+          : [...d.expenseCategories, c];
+        if (shared && spaceId) void fb.saveExpenseCategories(spaceId, expenseCategories);
+        return { ...d, expenseCategories };
+      });
+    },
+    [shared, spaceId]
+  );
+
+  /**
+   * 刪除自訂分類。
+   *
+   * 底下的帳目一律改掛到 moveToId,而不是留著指向已消失的分類——
+   * 孤兒帳目在圓餅與排行上只會變成一塊沒有名字的灰色,兩人都看不懂那是什麼。
+   * 預設分類擋在這裡不刪,畫面上也只提供「隱藏」。
+   */
+  const deleteExpenseCategory = useCallback(
+    (id: string, moveToId: string) => {
+      setData((d) => {
+        const target = d.expenseCategories.find((c) => c.id === id);
+        if (!target || target.builtin) return d;
+        const expenseCategories = d.expenseCategories.filter((c) => c.id !== id);
+        const moved: Expense[] = [];
+        const expenses = d.expenses.map((e) => {
+          if (e.categoryId !== id) return e;
+          const next = { ...e, categoryId: moveToId, updatedAt: Date.now() };
+          moved.push(next);
+          return next;
+        });
+        if (shared && spaceId) {
+          void fb.saveExpenseCategories(spaceId, expenseCategories);
+          void fb.saveExpenseDocs(spaceId, moved);
+        }
+        return { ...d, expenseCategories, expenses };
+      });
+    },
+    [shared, spaceId]
+  );
+
+  const setCategoryHidden = useCallback(
+    (id: string, hidden: boolean) => {
+      setData((d) => {
+        const expenseCategories = d.expenseCategories.map((c) =>
+          c.id === id ? { ...c, hidden } : c
+        );
+        if (shared && spaceId) void fb.saveExpenseCategories(spaceId, expenseCategories);
+        return { ...d, expenseCategories };
+      });
+    },
+    [shared, spaceId]
+  );
+
+  const reorderExpenseCategories = useCallback(
+    (kind: 'expense' | 'income', orderedIds: string[]) => {
+      setData((d) => {
+        const rank = new Map(orderedIds.map((id, i) => [id, i]));
+        const expenseCategories = d.expenseCategories.map((c) =>
+          c.kind === kind && rank.has(c.id) ? { ...c, order: rank.get(c.id) as number } : c
+        );
+        if (shared && spaceId) void fb.saveExpenseCategories(spaceId, expenseCategories);
+        return { ...d, expenseCategories };
+      });
+    },
+    [shared, spaceId]
+  );
+
+  const saveRecurringExpense = useCallback(
+    (r: RecurringExpense) => {
+      setData((d) => {
+        const exists = d.recurringExpenses.some((x) => x.id === r.id);
+        const recurringExpenses = exists
+          ? d.recurringExpenses.map((x) => (x.id === r.id ? r : x))
+          : [...d.recurringExpenses, r];
+        if (shared && spaceId) void fb.saveRecurringExpenses(spaceId, recurringExpenses);
+        return { ...d, recurringExpenses };
+      });
+    },
+    [shared, spaceId]
+  );
+
+  /**
+   * 刪掉固定支出的範本。
+   *
+   * 已經自動記下的那幾筆帳目留著不動:它們是真的花掉的錢,
+   * 取消訂閱不代表過去幾個月沒付過。
+   */
+  const deleteRecurringExpense = useCallback(
+    (id: string) => {
+      setData((d) => {
+        const recurringExpenses = d.recurringExpenses.filter((r) => r.id !== id);
+        if (shared && spaceId) void fb.saveRecurringExpenses(spaceId, recurringExpenses);
+        return { ...d, recurringExpenses };
+      });
+    },
+    [shared, spaceId]
+  );
+
+  const setBudget = useCallback((budget: ExpenseBudget) => {
+    setData((d) => ({ ...d, settings: { ...d.settings, budget } }));
+  }, []);
+
+  const setSharedSplit = useCallback((sharedSplit: SharedSplit) => {
+    setData((d) => ({ ...d, settings: { ...d.settings, sharedSplit } }));
+  }, []);
+
+  const setExpenseKeypad = useCallback((expenseKeypad: ExpenseKeypad) => {
+    setData((d) => ({ ...d, settings: { ...d.settings, expenseKeypad } }));
+  }, []);
+
+  /**
+   * 固定支出到期自動記一筆。
+   *
+   * 只在資料讀完後跑,且產生的是真實帳目——使用者可以單獨改或刪掉某個月那一筆。
+   * 刪掉的月份由 settings.recurringSkips 記著,不會在下次啟動時又被補回來。
+   */
+  const recurringCount = data.recurringExpenses.length;
+  useEffect(() => {
+    if (!ready || !loaded.current || !recurringCount) return;
+    const cur = dataRef.current;
+    const owner = cur.users.find((u) => u.isPrimary)?.id ?? cur.users[0]?.id ?? 'u1';
+    const created = pendingRecurring(
+      cur.recurringExpenses,
+      cur.expenses,
+      todayKey(),
+      owner,
+      uid,
+      cur.settings.recurringSkips
+    );
+    if (!created.length) return;
+    setData((d) => ({ ...d, expenses: [...d.expenses, ...created] }));
+    if (shared && spaceId) void fb.saveExpenseDocs(spaceId, created);
+  }, [ready, recurringCount, shared, spaceId]);
+
   const setCourseRemindMinutes = useCallback((mins: number | null) => {
     setData((d) => ({ ...d, settings: { ...d.settings, courseRemindMinutes: mins } }));
   }, []);
@@ -561,12 +827,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const createSharedSpace = useCallback(async (): Promise<string> => {
-    const code = await fb.createSpace(data.users, data.events, data.periods, data.courses);
+    const code = await fb.createSpace(
+      data.users,
+      data.events,
+      data.periods,
+      data.courses,
+      data.expenses,
+      data.expenseCategories,
+      data.recurringExpenses
+    );
     if (data.semesters.length) void fb.saveSemesters(code, data.semesters);
     if (authUser) void fb.bindUserSpace(authUser.uid, code);
     setData((d) => ({ ...d, settings: { ...d.settings, spaceId: code } }));
     return code;
-  }, [data.users, data.events, data.periods, data.courses, data.semesters, authUser]);
+  }, [
+    data.users,
+    data.events,
+    data.periods,
+    data.courses,
+    data.semesters,
+    data.expenses,
+    data.expenseCategories,
+    data.recurringExpenses,
+    authUser,
+  ]);
 
   const joinSharedSpace = useCallback(
     async (code: string): Promise<boolean> => {
@@ -574,12 +858,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const exists = await fb.spaceExists(normalized);
       if (!exists) return false;
       // 把本機既有資料合併上去(id 唯一,不會重複)
-      await fb.uploadLocal(normalized, data.events, data.periods, data.courses, data.semesters);
+      await fb.uploadLocal(
+        normalized,
+        data.events,
+        data.periods,
+        data.courses,
+        data.semesters,
+        data.expenses
+      );
       if (authUser) void fb.bindUserSpace(authUser.uid, normalized);
       setData((d) => ({ ...d, settings: { ...d.settings, spaceId: normalized } }));
       return true;
     },
-    [data.events, data.periods, data.courses, data.semesters, authUser]
+    [data.events, data.periods, data.courses, data.semesters, data.expenses, authUser]
   );
 
   const leaveSharedSpace = useCallback(() => {
@@ -644,9 +935,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           merged.events,
           merged.periods,
           merged.courses,
-          merged.semesters
+          merged.semesters,
+          merged.expenses
         );
         await fb.saveUsers(keepSpaceId, merged.users);
+        await fb.saveExpenseCategories(keepSpaceId, merged.expenseCategories);
+        await fb.saveRecurringExpenses(keepSpaceId, merged.recurringExpenses);
       }
     },
     [firebaseAvailable]
@@ -684,6 +978,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addCustomSymptom,
     setCourseRemindMinutes,
     setCrossDevicePush,
+    addExpense,
+    updateExpense,
+    deleteExpense,
+    saveExpenseCategory,
+    deleteExpenseCategory,
+    setCategoryHidden,
+    reorderExpenseCategories,
+    saveRecurringExpense,
+    deleteRecurringExpense,
+    setBudget,
+    setSharedSplit,
+    setExpenseKeypad,
     pullFromGoogle,
     restoreData,
     updateUser,
