@@ -225,8 +225,22 @@ export const WhoTag: React.FC<{
 /* ── 其他 ─────────────────────────────────────────────── */
 
 /** 右下角的 ＋ 浮動按鈕 */
-export const Fab: React.FC<{ onPress: () => void; bottom?: number }> = ({ onPress, bottom = 24 }) => (
-  <TouchableOpacity style={[s.fab, { bottom }]} onPress={onPress} accessibilityLabel="記一筆">
+export const Fab: React.FC<{
+  onPress: () => void;
+  bottom?: number;
+  /** 首次使用教學要知道這顆按鈕在螢幕上的位置 */
+  onMeasure?: (rect: { x: number; y: number; width: number; height: number }) => void;
+}> = ({ onPress, bottom = 24, onMeasure }) => (
+  <TouchableOpacity
+    style={[s.fab, { bottom }]}
+    onPress={onPress}
+    accessibilityLabel="記一筆"
+    onLayout={(e) => {
+      if (!onMeasure) return;
+      // onLayout 給的是相對父層的座標,打光需要螢幕絕對座標
+      e.currentTarget.measureInWindow((x, y, width, height) => onMeasure({ x, y, width, height }));
+    }}
+  >
     <Icon name="plus" size={26} color="#fff" />
   </TouchableOpacity>
 );

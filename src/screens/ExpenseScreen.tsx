@@ -8,7 +8,7 @@
  * 月份與歸屬留在這一層:從首頁跳到報表或日曆檢視時,期間與「看誰的」要跟著走,
  * 否則每換一個畫面都得重選一次。
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { Expense } from '../types';
 import { WhoFilter } from '../services/expenses';
@@ -20,11 +20,25 @@ import ExpenseCategoryScreen from './ExpenseCategoryScreen';
 import ExpenseSettingsScreen from './ExpenseSettingsScreen';
 import ExpenseEntryModal from '../components/ExpenseEntryModal';
 
-type SubView = 'home' | 'report' | 'calendar' | 'categories' | 'settings';
+export type ExpenseSubView = 'home' | 'report' | 'calendar' | 'categories' | 'settings';
 
-const ExpenseScreen: React.FC = () => {
+interface Props {
+  /**
+   * 從外面指定要停在哪個子畫面(側邊選單的「記帳設定」會用到)。
+   * 只在值改變時套用,之後使用者在頁內怎麼切都不會被拉回去。
+   */
+  requestedView?: ExpenseSubView;
+  /** 首次使用教學要打光在 ＋ 上 */
+  onFabMeasure?: (rect: { x: number; y: number; width: number; height: number }) => void;
+}
+
+const ExpenseScreen: React.FC<Props> = ({ requestedView, onFabMeasure }) => {
   const now = new Date();
-  const [view, setView] = useState<SubView>('home');
+  const [view, setView] = useState<ExpenseSubView>(requestedView ?? 'home');
+
+  useEffect(() => {
+    if (requestedView) setView(requestedView);
+  }, [requestedView]);
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
   const [who, setWho] = useState<WhoFilter>('self');
@@ -63,6 +77,7 @@ const ExpenseScreen: React.FC = () => {
           onOpenCalendar={() => setView('calendar')}
           onAdd={() => openAdd()}
           onEdit={openEdit}
+          onFabMeasure={onFabMeasure}
         />
       )}
       {view === 'report' && (

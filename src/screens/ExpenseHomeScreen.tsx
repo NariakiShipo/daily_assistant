@@ -54,6 +54,8 @@ interface Props {
   onOpenCalendar: () => void;
   onAdd: () => void;
   onEdit: (e: Expense) => void;
+  /** 首次使用教學要打光在 ＋ 上 */
+  onFabMeasure?: (rect: { x: number; y: number; width: number; height: number }) => void;
 }
 
 const ExpenseHomeScreen: React.FC<Props> = ({
@@ -67,6 +69,7 @@ const ExpenseHomeScreen: React.FC<Props> = ({
   onOpenCalendar,
   onAdd,
   onEdit,
+  onFabMeasure,
 }) => {
   const { data, deleteExpense } = useApp();
   const split = data.settings.sharedSplit ?? 'separate';
@@ -212,7 +215,7 @@ const ExpenseHomeScreen: React.FC<Props> = ({
         )}
       </ScrollView>
 
-      <Fab onPress={onAdd} />
+      <Fab onPress={onAdd} onMeasure={onFabMeasure} />
     </View>
   );
 };
