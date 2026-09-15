@@ -30,7 +30,7 @@ import { SettingsSection } from '../screens/SettingsScreen';
 
 /** 側邊選單可以開的設定子頁 */
 export type MenuDestination =
-  | { kind: 'settings'; section: SettingsSection; title: string }
+  | { kind: 'settings'; section?: SettingsSection; title: string }
   | { kind: 'expenseSettings' }
   | { kind: 'homeCards' }
   | { kind: 'pickModules' };
@@ -45,6 +45,8 @@ interface Props {
 }
 
 const SETTINGS_ROWS: { title: string; hint?: string; dest: MenuDestination }[] = [
+  // 第一列進總覽(設計稿 1o),其餘直接落在各自的子頁
+  { title: '設定總覽', hint: '全部設定與目前狀態', dest: { kind: 'settings', title: '設定' } },
   { title: '成員與顏色', dest: { kind: 'settings', section: 'members', title: '成員與顏色' } },
   { title: '帳號與雲端同步', dest: { kind: 'settings', section: 'account', title: '帳號與雲端同步' } },
   { title: '共享空間與配對碼', dest: { kind: 'settings', section: 'sharing', title: '共享空間' } },
@@ -58,6 +60,7 @@ const SETTINGS_ROWS: { title: string; hint?: string; dest: MenuDestination }[] =
   { title: 'Home 顯示內容', dest: { kind: 'homeCards' } },
   { title: '導覽列功能', hint: '重新選要放哪幾個', dest: { kind: 'pickModules' } },
   { title: '資料備份與還原', dest: { kind: 'settings', section: 'data', title: '資料備份與還原' } },
+  { title: '開發者選項', dest: { kind: 'settings', section: 'developer', title: '開發者選項' } },
 ];
 
 const SideMenu: React.FC<Props> = ({

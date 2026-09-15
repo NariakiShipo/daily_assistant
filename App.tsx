@@ -34,7 +34,7 @@ type OnboardStep = 'login' | 'pick';
 
 /** 從側邊選單開的覆蓋層 */
 type Overlay =
-  | { kind: 'settings'; section: SettingsSection; title: string }
+  | { kind: 'settings'; section?: SettingsSection; title: string }
   | { kind: 'pickModules' }
   | null;
 
@@ -207,8 +207,19 @@ const Main: React.FC = () => {
         <View style={s.overlay}>
           <SettingsScreen
             section={overlay.section}
-            title={overlay.title}
+            // 總覽自己會依子頁換標題,只有直接跳進某一段時才需要指定
+            title={overlay.section ? overlay.title : undefined}
             onBack={() => setOverlay(null)}
+            onOpenExternal={(dest) => {
+              setOverlay(null);
+              openFromMenu(
+                dest === 'expenseSettings'
+                  ? { kind: 'expenseSettings' }
+                  : dest === 'homeCards'
+                    ? { kind: 'homeCards' }
+                    : { kind: 'pickModules' }
+              );
+            }}
           />
         </View>
       )}
