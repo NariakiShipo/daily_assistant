@@ -38,6 +38,7 @@ export type IconName =
   | 'tool'
   // 介面
   | 'menu'
+  | 'house'
   | 'calendar'
   | 'wallet'
   | 'period'
@@ -184,6 +185,9 @@ const Icon: React.FC<Props> = ({ name, size = 24, color = colors.text, strokeWid
       )}
       {name === 'tool' && <Path d="M2 21l1.5-5.5L14 5l5 5L8.5 20.5z M14 5l3-3 5 5-3 3" {...stroke} />}
       {name === 'menu' && <Path d="M3 6h18M3 12h18M3 18h18" {...stroke} strokeWidth={2} />}
+      {name === 'house' && (
+        <Path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" {...stroke} />
+      )}
       {name === 'calendar' && (
         <>
           <Rect x={3} y={5} width={18} height={16} rx={3} {...stroke} />

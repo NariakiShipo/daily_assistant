@@ -13,6 +13,7 @@ import {
 import { useApp } from '../store/AppContext';
 import { colors, radius, spacing, userColorChoices } from '../theme';
 import { Button, Card, Chip, SectionTitle } from '../components/ui';
+import { ScreenHeader } from '../components/expenseUi';
 
 /** 上課提醒的可選提前時間 */
 const COURSE_REMIND_OPTIONS = [
@@ -32,7 +33,31 @@ import { confirmDialog, notify } from '../utils/dialog';
 import { backupFileName, buildBackup, parseBackup } from '../services/backup';
 import { pickBackup, saveBackup } from '../services/backupFile';
 
-const SettingsScreen: React.FC = () => {
+/**
+ * 設定頁可以只顯示其中一張卡。
+ *
+ * 側邊選單把設定拆成幾個入口,每個入口只帶使用者看那一段;不給 section
+ * 時維持原本的一整頁(舊的「設定」分頁與備份流程都還是這樣用)。
+ * 這是最小幅度的拆分——設計稿 1o 的完整子頁改版還沒做。
+ */
+export type SettingsSection =
+  | 'members'
+  | 'account'
+  | 'sharing'
+  | 'google'
+  | 'notifications'
+  | 'data';
+
+interface Props {
+  /** 只顯示這一段;未指定 = 全部 */
+  section?: SettingsSection;
+  /** 從側邊選單進來時顯示返回鍵 */
+  onBack?: () => void;
+  title?: string;
+}
+
+const SettingsScreen: React.FC<Props> = ({ section, onBack, title }) => {
+  const show = (id: SettingsSection) => !section || section === id;
   const {
     data,
     shared,
@@ -244,13 +269,13 @@ const SettingsScreen: React.FC = () => {
   };
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: colors.background }}
-      contentContainerStyle={{ padding: spacing.lg, paddingBottom: 40 }}
-    >
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      {!!onBack && <ScreenHeader title={title ?? '設定'} onBack={onBack} />}
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 40 }}>
       {/* 成員 */}
-      <Card>
-        <SectionTitle>成員設定</SectionTitle>
+      {show('members') && (
+        <Card>
+          <SectionTitle>成員設定</SectionTitle>
         <Text style={s.hint}>
           兩位成員共用日曆與經期紀錄,行程與紀錄都會標記是誰的/誰記的。
           {shared ? '名稱與顏色會同步到對方裝置。' : ''}
@@ -274,11 +299,13 @@ const SettingsScreen: React.FC = () => {
             {u.isPrimary && <Text style={s.primaryTag}>經期紀錄對象</Text>}
           </View>
         ))}
-      </Card>
+        </Card>
+      )}
 
       {/* 帳號(雲端同步) */}
-      <Card>
-        <SectionTitle>帳號(雲端同步)</SectionTitle>
+      {show('account') && (
+        <Card>
+          <SectionTitle>帳號(雲端同步)</SectionTitle>
         {!firebaseAvailable ? (
           <Text style={s.hint}>尚未設定 Firebase,無法使用帳號功能。</Text>
         ) : authUser ? (
@@ -346,11 +373,13 @@ const SettingsScreen: React.FC = () => {
             </Text>
           </>
         )}
-      </Card>
+        </Card>
+      )}
 
       {/* 跨裝置共享 */}
-      <Card>
-        <SectionTitle>跨裝置共享(Firebase)</SectionTitle>
+      {show('sharing') && (
+        <Card>
+          <SectionTitle>跨裝置共享(Firebase)</SectionTitle>
         {!firebaseAvailable ? (
           <Text style={s.hint}>
             尚未設定 Firebase。請依 README 步驟建立 Firebase 專案,把設定貼進 src/config.ts
@@ -425,11 +454,13 @@ const SettingsScreen: React.FC = () => {
             <Button label="加入共享空間" variant="outline" onPress={() => void onJoinSpace()} disabled={working} />
           </>
         )}
-      </Card>
+        </Card>
+      )}
 
       {/* Google Calendar */}
-      <Card>
-        <SectionTitle>Google Calendar</SectionTitle>
+      {show('google') && (
+        <Card>
+          <SectionTitle>Google Calendar</SectionTitle>
         <Text style={s.hint}>
           狀態:
           {data.settings.googleConnected
@@ -529,11 +560,13 @@ const SettingsScreen: React.FC = () => {
           連接後,行程開啟「同步到 Google 日曆」即自動同步;也可在 Google
           日曆建立共用日曆並將對方加為編輯者(見 README)。
         </Text>
-      </Card>
+        </Card>
+      )}
 
       {/* 通知 */}
-      <Card>
-        <SectionTitle>通知</SectionTitle>
+      {show('notifications') && (
+        <Card>
+          <SectionTitle>通知</SectionTitle>
         <View style={s.switchRow}>
           <Text style={s.switchLabel}>啟用推播通知</Text>
           <Switch
@@ -591,11 +624,13 @@ const SettingsScreen: React.FC = () => {
         )}
 
         <Button label="發送測試通知" variant="outline" onPress={() => void sendTestNotification()} />
-      </Card>
+        </Card>
+      )}
 
       {/* 資料 */}
-      <Card>
-        <SectionTitle>資料</SectionTitle>
+      {show('data') && (
+        <Card>
+          <SectionTitle>資料</SectionTitle>
         <Text style={s.hint}>
           {shared
             ? '資料即時同步至 Firebase,本機保留快取。'
@@ -609,8 +644,10 @@ const SettingsScreen: React.FC = () => {
         <Button label="⬇ 從備份還原" variant="outline" onPress={() => void doImport()} />
 
         <Button label="清除所有資料" variant="danger" onPress={confirmReset} />
-      </Card>
-    </ScrollView>
+        </Card>
+      )}
+      </ScrollView>
+    </View>
   );
 };
 
