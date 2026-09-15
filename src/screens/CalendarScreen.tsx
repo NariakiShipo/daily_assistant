@@ -11,6 +11,7 @@ import { useApp } from '../store/AppContext';
 import {
   CalendarEvent,
   EVENT_TAGS,
+  EventPriority,
   PRIORITY_LABELS,
   RECURRENCE_LABELS,
   TAG_DONE,
@@ -29,13 +30,16 @@ import {
 import { Card, Chip, Dot, SectionTitle } from '../components/ui';
 import EventModal from '../components/EventModal';
 import DayPreview from '../components/DayPreview';
+import EventFilterDrawer from '../components/EventFilterDrawer';
+import Icon from '../components/Icon';
+import { PeriodStepper, SoftSegmented } from '../components/expenseUi';
 import {
   EventInstance,
   expandEvents,
   findSeries,
   toggleOccurrenceDone,
 } from '../services/recurrence';
-import { TAG_UNDONE, filterEvents, ownersOf } from '../services/eventFilter';
+import { activeDrawerFilters, filterEvents, ownersOf } from '../services/eventFilter';
 
 type ViewMode = 'time' | 'person' | 'agenda';
 
@@ -56,8 +60,12 @@ const CalendarScreen: React.FC = () => {
   const [selected, setSelected] = useState(todayKey());
   const [filterUser, setFilterUser] = useState<string | null>(null); // null = 全部
   const [filterTag, setFilterTag] = useState<string | null>(null); // 標籤名或「未完成」
+  const [filterPriority, setFilterPriority] = useState<EventPriority | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('time');
   const [query, setQuery] = useState('');
+  /** 搜尋框預設收起來,點右上放大鏡才展開 */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<EventInstance | null>(null);
   const [previewKey, setPreviewKey] = useState<string | null>(null);
@@ -82,8 +90,9 @@ const CalendarScreen: React.FC = () => {
         query,
         ownerId: filterUser,
         tag: filterTag,
+        priority: filterPriority,
       }),
-    [data.events, monthStart, monthEnd, filterUser, filterTag, query]
+    [data.events, monthStart, monthEnd, filterUser, filterTag, filterPriority, query]
   );
 
   /** 未來 N 天的行程,依日期分組(與月份無關,永遠從今天算起) */
@@ -95,6 +104,7 @@ const CalendarScreen: React.FC = () => {
       query,
       ownerId: filterUser,
       tag: filterTag,
+      priority: filterPriority,
     });
     const days: { date: string; events: EventInstance[] }[] = [];
     for (let i = 0; i < AGENDA_DAYS; i++) {
@@ -106,7 +116,7 @@ const CalendarScreen: React.FC = () => {
       days.push({ date: key, events: evs });
     }
     return days;
-  }, [viewMode, data.events, today, filterUser, filterTag, query]);
+  }, [viewMode, data.events, today, filterUser, filterTag, filterPriority, query]);
 
   /** 跨日行程展開到範圍內每一天(上限 62 天防呆),每天依開始時間排序 */
   const eventsByDate = useMemo(() => {
@@ -171,29 +181,42 @@ const CalendarScreen: React.FC = () => {
 
   const selectedEvents = eventsByDate[selected] ?? [];
 
+  const drawerCount = activeDrawerFilters({ tag: filterTag, priority: filterPriority });
+
   return (
     <View style={s.container}>
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 90 }}>
-        {/* 月份切換 */}
-        <View style={s.monthNav}>
-          <TouchableOpacity onPress={prevMonth} style={s.navBtn}>
-            <Text style={s.navBtnText}>‹</Text>
-          </TouchableOpacity>
-          <Text style={s.monthTitle}>{formatMonthZh(year, month)}</Text>
-          <TouchableOpacity onPress={nextMonth} style={s.navBtn}>
-            <Text style={s.navBtnText}>›</Text>
+      {/*
+        * 頁首把「月份切換」與「搜尋」收成一列:原本月曆上方疊了四列
+        * (搜尋、成員、檢視、標籤),月曆被推到第二屏(檢視清單第 03 條)。
+        */}
+      <View style={s.header}>
+        <View style={s.headerSide} />
+        <PeriodStepper label={formatMonthZh(year, month)} onPrev={prevMonth} onNext={nextMonth} />
+        <View style={[s.headerSide, s.headerRight]}>
+          <TouchableOpacity
+            style={[s.roundBtn, searchOpen && s.roundBtnOn]}
+            onPress={() => {
+              // 收起來時一併清掉關鍵字,否則搜尋看不見卻還在過濾
+              if (searchOpen) setQuery('');
+              setSearchOpen((v) => !v);
+            }}
+            accessibilityLabel="搜尋"
+          >
+            <Icon name="search" size={18} color={searchOpen ? '#fff' : colors.primary} />
           </TouchableOpacity>
         </View>
+      </View>
 
-        {/* 搜尋 */}
+      {searchOpen && (
         <View style={s.searchRow}>
           <TextInput
             style={s.searchInput}
             value={query}
             onChangeText={setQuery}
-            placeholder="🔍 搜尋標題、備註、標籤"
+            placeholder="搜尋標題、備註、標籤"
             placeholderTextColor={colors.textMuted}
             autoCapitalize="none"
+            autoFocus
           />
           {!!query && (
             <TouchableOpacity style={s.clearBtn} onPress={() => setQuery('')}>
@@ -201,49 +224,30 @@ const CalendarScreen: React.FC = () => {
             </TouchableOpacity>
           )}
         </View>
+      )}
 
-        {/* 篩選:全部 / 個人 */}
-        <View style={s.filterRow}>
-          <Chip label="全部" active={filterUser === null} onPress={() => setFilterUser(null)} />
-          {data.users.map((u) => (
-            <Chip
-              key={u.id}
-              label={u.name}
-              color={u.color}
-              active={filterUser === u.id}
-              onPress={() => setFilterUser(filterUser === u.id ? null : u.id)}
-            />
-          ))}
-        </View>
+      <View style={s.chipRow}>
+        <Chip label="全部" active={filterUser === null} onPress={() => setFilterUser(null)} />
+        {data.users.map((u) => (
+          <Chip
+            key={u.id}
+            label={u.name}
+            color={u.color}
+            active={filterUser === u.id}
+            onPress={() => setFilterUser(filterUser === u.id ? null : u.id)}
+          />
+        ))}
+        <TouchableOpacity style={s.filterBtn} onPress={() => setFilterOpen(true)}>
+          <Text style={s.filterBtnText}>篩選</Text>
+          {drawerCount > 0 && (
+            <View style={s.filterBadge}>
+              <Text style={s.filterBadgeText}>{drawerCount}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      </View>
 
-        {/* 檢視模式 */}
-        <View style={s.filterRow}>
-          <Text style={s.filterLabel}>檢視:</Text>
-          {VIEW_MODES.map((m) => (
-            <Chip
-              key={m.key}
-              label={m.label}
-              color={colors.accent}
-              active={viewMode === m.key}
-              onPress={() => setViewMode(m.key)}
-            />
-          ))}
-        </View>
-
-        {/* 標籤篩選 */}
-        <View style={s.filterRow}>
-          <Text style={s.filterLabel}>標籤:</Text>
-          {[...allTags, TAG_UNDONE].map((t) => (
-            <Chip
-              key={t}
-              label={t}
-              color={t === TAG_UNDONE ? colors.textMuted : tagColor(t)}
-              active={filterTag === t}
-              onPress={() => setFilterTag(filterTag === t ? null : t)}
-            />
-          ))}
-        </View>
-
+      <ScrollView contentContainerStyle={s.scroll}>
         {/* 月曆格 */}
         <Card style={{ padding: spacing.sm }}>
           <View style={s.weekRow}>
@@ -306,6 +310,17 @@ const CalendarScreen: React.FC = () => {
             ))}
           </View>
         </Card>
+
+        {/*
+          * 「依時間 / 依人 / 未來 7 天」放在月曆下方:它切換的是下面那份清單,
+          * 不是上面的月曆,放在月曆上方會讓人以為月曆本身會跟著變。
+          */}
+        <SoftSegmented<ViewMode>
+          style={s.viewSeg}
+          value={viewMode}
+          onChange={setViewMode}
+          options={VIEW_MODES.map((m) => ({ value: m.key, label: m.label }))}
+        />
 
         {viewMode === 'agenda' ? (
           /* 未來 N 天:每天一區,含空白日 */
@@ -409,6 +424,20 @@ const CalendarScreen: React.FC = () => {
         }}
       />
 
+      <EventFilterDrawer
+        visible={filterOpen}
+        onClose={() => setFilterOpen(false)}
+        tags={allTags}
+        tag={filterTag}
+        onChangeTag={setFilterTag}
+        priority={filterPriority}
+        onChangePriority={setFilterPriority}
+        onClear={() => {
+          setFilterTag(null);
+          setFilterPriority(null);
+        }}
+      />
+
       <EventModal
         visible={modalOpen}
         onClose={() => setModalOpen(false)}
@@ -479,14 +508,17 @@ const CELL = `${100 / 7}%` as const;
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  monthNav: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingTop: 6,
+    paddingBottom: spacing.sm,
   },
-  monthTitle: { fontSize: 19, fontWeight: '700', color: colors.text },
-  navBtn: {
+  headerSide: { minWidth: 36, flexDirection: 'row' },
+  headerRight: { justifyContent: 'flex-end' },
+  roundBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
@@ -494,14 +526,43 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  navBtnText: { fontSize: 20, color: colors.primary, fontWeight: '700' },
-  filterRow: {
+  roundBtnOn: { backgroundColor: colors.primary },
+  scroll: { paddingHorizontal: spacing.lg, paddingBottom: 90 },
+  chipRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    marginBottom: 10,
+  },
+  filterBtn: {
+    marginLeft: 'auto',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1.5,
+    borderColor: colors.accent,
+    borderRadius: radius.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  filterBtnText: { fontSize: 13, fontWeight: '600', color: colors.accent },
+  filterBadge: {
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
+  viewSeg: { marginTop: spacing.sm, marginBottom: spacing.md },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
     marginBottom: spacing.md,
   },
-  searchRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
   searchInput: {
     flex: 1,
     backgroundColor: colors.card,
@@ -533,8 +594,9 @@ const s = StyleSheet.create({
   },
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
   cell: {
+    // 86 → 50:五週的月曆要完整落在第一屏(檢視清單第 03 條)
     width: CELL,
-    minHeight: 86,
+    minHeight: 50,
     paddingTop: 4,
     paddingHorizontal: 2,
     paddingBottom: 3,
@@ -563,7 +625,6 @@ const s = StyleSheet.create({
   empty: { color: colors.textMuted, fontSize: 13, marginBottom: spacing.md },
   eventRow: { flexDirection: 'row', alignItems: 'center' },
   eventBar: { width: 4, alignSelf: 'stretch', borderRadius: 2, marginRight: spacing.md },
-  filterLabel: { fontSize: 13, color: colors.textMuted, marginRight: spacing.xs },
   eventTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
   eventTitleDone: {
     textDecorationLine: 'line-through',
