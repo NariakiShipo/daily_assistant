@@ -275,7 +275,39 @@ export interface AppSettings {
    * 沒有這份清單的話,下次開 App 時自動補帳會把刪掉的那一筆又補回來。
    */
   recurringSkips?: string[];
+  /** 底部導覽列要放哪幾個模組(最多 4 個,順序 = 左到右;Home 固定在中間) */
+  navModules?: ModuleKey[];
+  /** Home 的卡片:順序與開關 */
+  homeCards?: HomeCardPref[];
+  /** Home 的「今日課程」看誰的課表(未設 = 主要使用者) */
+  homeCourseOwnerId?: string;
+  /** 是否走完「登入 → 選常用功能」;false 時進 App 會先到登入頁 */
+  onboarded?: boolean;
+  /** 是否看過首次使用教學;可從側邊選單「重看使用教學」重設 */
+  tutorialSeen?: boolean;
 }
+
+/* ───────────────────── 導覽與 Home ───────────────────── */
+
+/** 可以放進底部導覽列的功能模組 */
+export type ModuleKey = 'calendar' | 'expense' | 'period' | 'timetable';
+
+/** 底部導覽列最多放幾個模組(左右各 2,中間留給 Home) */
+export const MAX_NAV_MODULES = 4;
+
+/** Home 上一張卡片的偏好 */
+export interface HomeCardPref {
+  key: HomeCardKey;
+  on: boolean;
+}
+
+export type HomeCardKey =
+  | 'course'
+  | 'period'
+  | 'events'
+  | 'expense'
+  | 'tomorrow'
+  | 'monthExpense';
 
 export interface AppData {
   users: UserProfile[];

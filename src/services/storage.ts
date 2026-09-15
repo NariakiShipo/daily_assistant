@@ -29,6 +29,8 @@ export const defaultData: AppData = {
     expenseKeypad: 'app',
     recentExpenseNotes: [],
     recurringSkips: [],
+    onboarded: false,
+    tutorialSeen: false,
   },
 };
 

@@ -15,6 +15,8 @@ import {
   ExpenseBudget,
   ExpenseCategory,
   ExpenseKeypad,
+  HomeCardPref,
+  ModuleKey,
   PeriodRecord,
   RecurringExpense,
   SemesterMeta,
@@ -98,6 +100,17 @@ interface AppContextValue {
   // 固定支出
   saveRecurringExpense: (r: RecurringExpense) => void;
   deleteRecurringExpense: (id: string) => void;
+  // 導覽與 Home
+  /** 底部導覽列要放哪幾個模組(順序 = 左到右) */
+  setNavModules: (modules: ModuleKey[]) => void;
+  /** Home 卡片的順序與開關 */
+  setHomeCards: (cards: HomeCardPref[]) => void;
+  /** Home 的「今日課程」要看誰的課表 */
+  setHomeCourseOwner: (userId: string) => void;
+  /** 走完登入 → 選常用功能之後標記完成 */
+  setOnboarded: (done: boolean) => void;
+  /** 看過首次使用教學;傳 false 等於「重看使用教學」 */
+  setTutorialSeen: (seen: boolean) => void;
   // 記帳設定
   setBudget: (budget: ExpenseBudget) => void;
   setSharedSplit: (split: SharedSplit) => void;
@@ -731,6 +744,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [shared, spaceId]
   );
 
+  /* ─────────────────── 導覽與 Home ─────────────────── */
+
+  const setNavModules = useCallback((navModules: ModuleKey[]) => {
+    setData((d) => ({ ...d, settings: { ...d.settings, navModules } }));
+  }, []);
+
+  const setHomeCards = useCallback((homeCards: HomeCardPref[]) => {
+    setData((d) => ({ ...d, settings: { ...d.settings, homeCards } }));
+  }, []);
+
+  const setHomeCourseOwner = useCallback((homeCourseOwnerId: string) => {
+    setData((d) => ({ ...d, settings: { ...d.settings, homeCourseOwnerId } }));
+  }, []);
+
+  const setOnboarded = useCallback((onboarded: boolean) => {
+    setData((d) => ({ ...d, settings: { ...d.settings, onboarded } }));
+  }, []);
+
+  const setTutorialSeen = useCallback((tutorialSeen: boolean) => {
+    setData((d) => ({ ...d, settings: { ...d.settings, tutorialSeen } }));
+  }, []);
+
   const setBudget = useCallback((budget: ExpenseBudget) => {
     setData((d) => ({ ...d, settings: { ...d.settings, budget } }));
   }, []);
@@ -987,6 +1022,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     reorderExpenseCategories,
     saveRecurringExpense,
     deleteRecurringExpense,
+    setNavModules,
+    setHomeCards,
+    setHomeCourseOwner,
+    setOnboarded,
+    setTutorialSeen,
     setBudget,
     setSharedSplit,
     setExpenseKeypad,
