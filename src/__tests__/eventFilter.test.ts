@@ -2,8 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   TAG_UNDONE,
+  activeDrawerFilters,
   filterEvents,
   matchesOwner,
+  matchesPriority,
   matchesQuery,
   matchesTag,
   ownersOf,
@@ -126,4 +128,54 @@ test('filterEvents 保留輸入的擴充欄位', () => {
   const list = [{ ...event(), seriesId: 's1' }];
   const out = filterEvents(list, { query: '牙醫' });
   assert.equal(out[0].seriesId, 's1');
+});
+
+/* ── 優先順序 ─────────────────────────────────────────── */
+
+test('matchesPriority 未指定條件時一律命中', () => {
+  assert.equal(matchesPriority(event(), null), true);
+  assert.equal(matchesPriority(event({ priority: 'high' }), undefined), true);
+});
+
+test('matchesPriority 只留下同一個優先順序', () => {
+  assert.equal(matchesPriority(event({ priority: 'high' }), 'high'), true);
+  assert.equal(matchesPriority(event({ priority: 'low' }), 'high'), false);
+});
+
+test('matchesPriority 沒設優先順序的行程不會被當成任何一級', () => {
+  assert.equal(matchesPriority(event(), 'high'), false);
+  assert.equal(matchesPriority(event(), 'medium'), false);
+});
+
+test('filterEvents 會一起套用優先順序', () => {
+  const list = [
+    event({ id: 'a', priority: 'high' }),
+    event({ id: 'b', priority: 'low' }),
+    event({ id: 'c' }),
+  ];
+  assert.deepEqual(
+    filterEvents(list, { priority: 'high' }).map((e) => e.id),
+    ['a']
+  );
+});
+
+test('filterEvents 的條件是交集', () => {
+  const list = [
+    event({ id: 'a', priority: 'high', ownerId: 'u1' }),
+    event({ id: 'b', priority: 'high', ownerId: 'u2' }),
+  ];
+  assert.deepEqual(
+    filterEvents(list, { priority: 'high', ownerId: 'u2' }).map((e) => e.id),
+    ['b']
+  );
+});
+
+/* ── 抽屜徽章 ─────────────────────────────────────────── */
+
+test('activeDrawerFilters 只數收在抽屜裡的條件', () => {
+  // 成員與關鍵字在畫面上看得見,不需要徽章提醒
+  assert.equal(activeDrawerFilters({ ownerId: 'u1', query: '牙醫' }), 0);
+  assert.equal(activeDrawerFilters({ tag: '重要' }), 1);
+  assert.equal(activeDrawerFilters({ tag: TAG_UNDONE, priority: 'high' }), 2);
+  assert.equal(activeDrawerFilters({}), 0);
 });
