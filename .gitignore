@@ -60,3 +60,8 @@ yarn-error.log*
 *.apk
 *.aab
 *.ipa
+
+# ===== 設計工具本機產物 =====
+.design-sync/
+.ds-sync/
+ds-bundle/
