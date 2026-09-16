@@ -52,6 +52,34 @@ export function getCurrentUser(): AuthUser | null {
   return u ? { uid: u.uid, email: u.email } : null;
 }
 
+/** authStateReady 極少數情況會卡在帳號重載的網路請求;超時就放行,不讓呼叫端無限等待 */
+const AUTH_READY_TIMEOUT_MS = 8000;
+
+/**
+ * 等 Firebase 還原完登入狀態才 resolve。
+ *
+ * Auth instance 建好不代表 currentUser 已填入:web 要先讀 IndexedDB、必要時重載帳號,
+ * 這段期間 currentUser 一律是 null。沒等就讀會把「還沒還原」誤判成「未登入」,
+ * 日曆的伺服器代管授權就是這樣被誤判成斷線的(見 calendarBackend.fetchServerToken)。
+ *
+ * resolve 後 currentUser 可能是使用者、也可能真的是 null(已登出)。
+ */
+export async function waitForAuthReady(): Promise<void> {
+  const a = getAuthInstance();
+  if (!a) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      a.authStateReady(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, AUTH_READY_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** 訂閱登入狀態,回傳取消訂閱函式 */
 export function onAuthChanged(cb: (u: AuthUser | null) => void): () => void {
   const a = getAuthInstance();
