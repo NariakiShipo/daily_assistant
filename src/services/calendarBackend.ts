@@ -6,6 +6,7 @@
  * 對應的後端在 functions/index.js。
  */
 import { getFunctions, httpsCallable } from 'firebase/functions';
+import { isFirebaseConfigured } from '../config';
 import { getFirebaseApp } from './firebaseSync';
 import { getCurrentUser, waitForAuthReady } from './auth';
 
@@ -47,8 +48,16 @@ export async function exchangeGoogleCode(
  */
 export type ServerTokenResult =
   | { status: 'ok'; token: ServerToken }
-  | { status: 'disconnected' }
+  | { status: 'disconnected'; reason: DisconnectReason }
   | { status: 'unavailable' };
+
+/**
+ * 為什麼沒有 token。
+ * - 'never'      伺服器上從來沒有這個帳號的綁定
+ * - 'revoked'    綁定過但 refresh token 已失效(使用者撤銷,或同意畫面停在 Testing 滿 7 天)
+ * - 'signed-out' 前端沒登入帳號 —— 伺服器根本沒被問到,綁定很可能還在
+ */
+export type DisconnectReason = 'never' | 'revoked' | 'signed-out';
 
 /** 重試間隔;主要對付 asia-east1 + Secret Manager 的冷啟動 */
 const RETRY_DELAYS_MS = [500, 2000];
@@ -61,15 +70,18 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 async function requestServerToken(): Promise<ServerTokenResult> {
   const fn = callable<
     Record<string, never>,
-    { connected: boolean; accessToken?: string; expiresIn?: number }
+    { connected: boolean; accessToken?: string; expiresIn?: number; reason?: DisconnectReason }
   >('getCalendarToken');
   if (!fn) return { status: 'unavailable' }; // Firebase 未設定:不確定,不是「沒連接」
 
   for (let attempt = 0; ; attempt++) {
     try {
       const res = await fn({});
-      // 後端明確回報未綁定(沒有 refresh token,或 refresh token 已被撤銷)
-      if (!res.data.connected || !res.data.accessToken) return { status: 'disconnected' };
+      // 後端明確回報未綁定(沒有 refresh token,或 refresh token 已被撤銷)。
+      // reason 缺席代表後端還是加上這個欄位之前的版本,保守當成「從沒連過」。
+      if (!res.data.connected || !res.data.accessToken) {
+        return { status: 'disconnected', reason: res.data.reason ?? 'never' };
+      }
       return {
         status: 'ok',
         token: { accessToken: res.data.accessToken, expiresIn: res.data.expiresIn ?? 3600 },
@@ -84,22 +96,46 @@ async function requestServerToken(): Promise<ServerTokenResult> {
   }
 }
 
-/** 併發去重:多筆行程同時同步時只打一次後端 */
-let inflight: Promise<ServerTokenResult> | null = null;
+/**
+ * 併發去重:多筆行程同時同步時只打一次後端。
+ *
+ * 必須綁住發起時的 uid。身分檢查在這之外,而一次請求(asia-east1 冷啟動 + 兩次重試)
+ * 可以活上好幾分鐘;期間換帳號登入的話,B 會直接拿到用 A 的 ID token 換來的 access
+ * token,接著把 B 的行程寫進 A 的 Google 日曆。
+ */
+let inflight: { uid: string; id: number; promise: Promise<ServerTokenResult> } | null = null;
+let nextInflightId = 0;
 
 /** 向伺服器要新的 access token */
 export async function fetchServerToken(): Promise<ServerTokenResult> {
   // 一定要等登入狀態還原完:callable 得帶 ID token,而 Firebase 還原 session 比
   // App 啟動慢得多。少了這一步,開頁面時 getCurrentUser() 還是 null,永久連接會被
   // 誤判成斷線——本機 token 過期後每次開啟都必中,正是「一小時後就斷」的來源。
-  await waitForAuthReady();
-  if (!getCurrentUser()) return { status: 'disconnected' };
-  if (!inflight) {
-    inflight = requestServerToken().finally(() => {
-      inflight = null;
-    });
+  // 沒有 Firebase 設定就不可能有伺服器代管綁定——這是確定的答案,不是「問不到」。
+  // 混進 unavailable 的話 isConnectedAsync() 會永遠回 null,設定頁的連接狀態
+  // 從此凍結在舊值,再也不會自我更正。要在 waitForAuthReady 之前擋掉:
+  // 它的 false 同時代表逾時與未設定,分不出來。
+  if (!isFirebaseConfigured()) return { status: 'disconnected', reason: 'never' };
+
+  // 逾時(8 秒)代表登入狀態到現在仍然未知,不是「沒登入」。當成 disconnected 的話
+  // getAccessTokenResult 會順手清掉本機的永久連接標記,比不修還糟。
+  if (!(await waitForAuthReady())) return { status: 'unavailable' };
+
+  const user = getCurrentUser();
+  if (!user) return { status: 'disconnected', reason: 'signed-out' };
+
+  if (!inflight || inflight.uid !== user.uid) {
+    const id = ++nextInflightId;
+    inflight = {
+      uid: user.uid,
+      id,
+      // 只清掉自己這筆:期間若已被換帳號的新請求取代,別把新的誤清
+      promise: requestServerToken().finally(() => {
+        if (inflight?.id === id) inflight = null;
+      }),
+    };
   }
-  return inflight;
+  return inflight.promise;
 }
 
 /** 解除伺服器端綁定(撤銷並刪除 refresh token);失敗靜默 */

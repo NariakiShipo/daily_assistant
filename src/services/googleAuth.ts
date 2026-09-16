@@ -122,10 +122,25 @@ export async function getAccessTokenResult(): Promise<TokenResult> {
     return { token: server.token.accessToken, uncertain: false };
   }
   if (server.status === 'disconnected' && t?.serverManaged) {
-    // 伺服器明確說沒有綁定(使用者撤銷了授權,或換了另一個帳號登入)。
-    // 清掉過時的永久標記,否則設定頁會一直顯示「已連接(永久)」。
-    // 只有在確定沒綁定時才清——'unavailable' 時動它會把暫時失敗變成真的斷線。
-    await AsyncStorage.removeItem(TOKEN_KEY);
+    // 'unavailable' 不進這裡:那是這次問不到,動它會把暫時失敗變成真的斷線。
+    if (server.reason === 'signed-out') {
+      // 前端沒登入,伺服器根本沒被問到,綁定通常還在——登出帳號不該解除伺服器綁定
+      // (只有「中斷連接」會),所以 token 留著。但 serverManaged 在沒登入時無從驗證,
+      // 留著會被下一次「暫時連接」經由 storeCalendarToken 的 ?? 繼承,讓設定頁誤顯示
+      // 「永久」並把「永久連接」按鈕藏起來。降級成暫時,下次問到伺服器再升回去。
+      // 直接覆寫整筆並保留原本的 expiresAt——不能走 saveTokens,它會用 expiresIn
+      // 重算到期時間,把這顆早就過期的 token 復活成再有效一小時。
+      const downgraded: StoredTokens = { ...t, serverManaged: false };
+      await AsyncStorage.setItem(TOKEN_KEY, JSON.stringify(downgraded));
+    } else {
+      // 伺服器明確說沒有綁定('never' / 'revoked'):使用者撤銷了授權,或換了帳號。
+      // 清掉過時的永久標記,否則設定頁會一直顯示「已連接(永久)」。
+      // 重讀一次再比對:從函式開頭讀到 t 到現在可能隔了數十秒(waitForAuthReady 8 秒
+      // + 冷啟動 + 重試),期間使用者可能剛跑完「永久連接」寫入了新 token,
+      // 無條件刪除會把那顆剛拿到的新 token 一起刪掉。
+      const cur = await loadTokens();
+      if (cur && cur.accessToken === t.accessToken) await AsyncStorage.removeItem(TOKEN_KEY);
+    }
   }
   return { token: null, uncertain: server.status === 'unavailable' };
 }

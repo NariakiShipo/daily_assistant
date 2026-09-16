@@ -56,23 +56,25 @@ export function getCurrentUser(): AuthUser | null {
 const AUTH_READY_TIMEOUT_MS = 8000;
 
 /**
- * 等 Firebase 還原完登入狀態才 resolve。
+ * 等 Firebase 還原完登入狀態。
  *
  * Auth instance 建好不代表 currentUser 已填入:web 要先讀 IndexedDB、必要時重載帳號,
  * 這段期間 currentUser 一律是 null。沒等就讀會把「還沒還原」誤判成「未登入」,
  * 日曆的伺服器代管授權就是這樣被誤判成斷線的(見 calendarBackend.fetchServerToken)。
  *
- * resolve 後 currentUser 可能是使用者、也可能真的是 null(已登出)。
+ * 回傳 true = 真的還原完了,此時 currentUser 可能是使用者、也可能真的是 null(已登出);
+ * 回傳 false = 逾時或 Firebase 未設定,登入狀態仍然未知。呼叫端不可把 false 當成
+ * 「未登入」——那正是這個函式要防的誤判。
  */
-export async function waitForAuthReady(): Promise<void> {
+export async function waitForAuthReady(): Promise<boolean> {
   const a = getAuthInstance();
-  if (!a) return;
+  if (!a) return false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
-      a.authStateReady(),
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, AUTH_READY_TIMEOUT_MS);
+    return await Promise.race([
+      a.authStateReady().then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), AUTH_READY_TIMEOUT_MS);
       }),
     ]);
   } finally {

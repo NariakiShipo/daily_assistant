@@ -16,6 +16,7 @@
  * 執行環境 Node 22(Node 20 於 2026-10-30 停用)。
  */
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const logger = require('firebase-functions/logger');
 const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const { initializeApp } = require('firebase-admin/app');
@@ -84,11 +85,22 @@ exports.exchangeGoogleCode = onCall(
           : {}),
       });
     } catch (e) {
+      // 初次連接最容易壞(redirect_uri 不符、授權碼過期、client secret 設錯),
+      // 而 HttpsError 不會被框架寫進 log —— 少了這行,Cloud Logging 一片空白。
+      // redirectUri 是公開網址可以印;code / codeVerifier 是憑證,絕不能印。
+      logger.error('exchangeGoogleCode: 交換失敗', e, {
+        uid,
+        oauthError: e.oauthError ?? '',
+        oauthErrorDescription: e.message,
+        redirectUri,
+        hasCodeVerifier: typeof codeVerifier === 'string' && !!codeVerifier,
+      });
       throw new HttpsError('failed-precondition', `Google 授權碼交換失敗:${e.message}`);
     }
 
     const docRef = db.collection(TOKENS_COLLECTION).doc(uid);
     if (json.refresh_token) {
+      // 不用 merge:整份覆寫,順便清掉上次失效時留下的 revokedAt
       await docRef.set({
         refreshToken: json.refresh_token,
         scope: json.scope ?? '',
@@ -96,8 +108,16 @@ exports.exchangeGoogleCode = onCall(
         updatedAt: FieldValue.serverTimestamp(),
       });
     }
-    // 沒拿到新 refresh token 時,若先前已有存檔仍算永久連接
-    const permanent = !!json.refresh_token || (await docRef.get()).exists;
+    // 沒拿到新 refresh token 時,若先前已有「還有效的」存檔仍算永久連接。
+    // 注意要看 refreshToken 欄位而不是文件存在:失效時我們保留文件(只把欄位清成 null)
+    // 留稽核線索,只看 exists 會把已撤銷的綁定誤報成永久連接。
+    const permanent = !!json.refresh_token || !!(await docRef.get()).data()?.refreshToken;
+    logger.info('exchangeGoogleCode', {
+      uid,
+      permanent,
+      gotRefreshToken: !!json.refresh_token,
+      scope: json.scope ?? '',
+    });
 
     return {
       accessToken: json.access_token,
@@ -109,7 +129,14 @@ exports.exchangeGoogleCode = onCall(
 
 /**
  * 取得新的 access token:前端本機 token 過期時呼叫。
- * 用保管的 refresh token 向 Google 換新;refresh token 失效(使用者撤銷)則清除存檔。
+ * 用保管的 refresh token 向 Google 換新;refresh token 失效則標記為已撤銷。
+ *
+ * 回傳的 reason 讓前端能分辨「從沒連過」與「連過但授權死了」——前者該引導去連接,
+ * 後者該引導重新授權。少了它兩種情況的畫面一模一樣,使用者只會覺得「又斷了」。
+ *
+ * 三條出口都留 log:沒有它就無法分辨這支「根本沒被呼叫」(前端時序問題)、
+ * 「回報未連接」(綁定真的沒了)與「丟 unavailable」(後端或 Google 暫時失敗),
+ * 而這三種情況的修法完全不同。
  */
 exports.getCalendarToken = onCall(
   { region: REGION, secrets: [GOOGLE_CLIENT_SECRET] },
@@ -118,7 +145,12 @@ exports.getCalendarToken = onCall(
     const docRef = db.collection(TOKENS_COLLECTION).doc(uid);
     const snap = await docRef.get();
     const refreshToken = snap.exists ? snap.data().refreshToken : null;
-    if (!refreshToken) return { connected: false };
+    if (!refreshToken) {
+      // 文件在但沒 token = 之前被標記撤銷過;文件不在 = 這個帳號從沒連過
+      const reason = snap.exists ? 'revoked' : 'never';
+      logger.info('getCalendarToken: 未連接', { uid, reason });
+      return { connected: false, reason };
+    }
 
     try {
       const json = await tokenRequest({
@@ -127,17 +159,40 @@ exports.getCalendarToken = onCall(
         client_id: GOOGLE_CLIENT_ID.value(),
         client_secret: GOOGLE_CLIENT_SECRET.value(),
       });
+      logger.info('getCalendarToken: 續期成功', { uid, expiresIn: json.expires_in ?? 3600 });
       return {
         connected: true,
         accessToken: json.access_token,
         expiresIn: json.expires_in ?? 3600,
       };
     } catch (e) {
-      // invalid_grant = refresh token 已被撤銷或過期 → 視為未連接
       if (e.oauthError === 'invalid_grant') {
-        await docRef.delete();
-        return { connected: false };
+        // refresh token 已失效。**不刪文件**,只把 token 清成 null 並記下時間:
+        // invalid_grant 不等於使用者撤銷 —— OAuth 同意畫面停在 Testing 時,
+        // refresh token 每 7 天就會自己過期。整份刪掉會把唯一的線索一起刪掉,
+        // 「為什麼又斷了」就永遠查不出來。重新授權時 exchangeGoogleCode 會整份覆寫。
+        await docRef.set(
+          { refreshToken: null, revokedAt: FieldValue.serverTimestamp() },
+          { merge: true }
+        );
+        // 欄位不可叫 message:firebase-functions 的 entryFromArgs 會用日誌文字
+        // 蓋掉結構化物件的 message 鍵(out = {...entry, severity}; out.message = message),
+        // Google 回的錯誤描述會整個消失。
+        logger.warn('getCalendarToken: refresh token 失效', {
+          uid,
+          oauthError: e.oauthError,
+          oauthErrorDescription: e.message,
+          hint: '若 OAuth 同意畫面仍是 Testing,refresh token 每 7 天必過期',
+        });
+        return { connected: false, reason: 'revoked' };
       }
+      // 把 Error 實例一起傳進去:ERROR severity 的參數裡沒有 Error 時,
+      // firebase-functions 會把 message 換成指向這行 logger 呼叫的合成堆疊。
+      logger.error('getCalendarToken: 續期失敗', e, {
+        uid,
+        oauthError: e.oauthError ?? '',
+        oauthErrorDescription: e.message,
+      });
       throw new HttpsError('unavailable', `更新 Google token 失敗:${e.message}`);
     }
   }
@@ -207,6 +262,7 @@ exports.disconnectCalendar = onCall({ region: REGION }, async (request) => {
   const snap = await docRef.get();
   const refreshToken = snap.exists ? snap.data().refreshToken : null;
   await docRef.delete();
+  logger.info('disconnectCalendar: 已解除綁定', { uid, hadRefreshToken: !!refreshToken });
   if (refreshToken) {
     // 撤銷失敗不影響解除結果(token 之後自然過期)
     await fetch(REVOKE_ENDPOINT, {
