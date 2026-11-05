@@ -179,9 +179,11 @@ const ExpenseEntryModal: React.FC<Props> = ({
       <View style={s.backdrop}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={s.sheet}>
           <View style={s.head}>
-            <TouchableOpacity style={s.roundBtn} onPress={onClose} accessibilityLabel="關閉">
-              <Icon name="close" size={16} color={colors.primary} />
-            </TouchableOpacity>
+            <View style={s.headSide}>
+              <TouchableOpacity style={s.roundBtn} onPress={onClose} accessibilityLabel="關閉">
+                <Icon name="close" size={16} color={colors.primary} />
+              </TouchableOpacity>
+            </View>
             <Segmented<ExpenseKind>
               style={s.kindSeg}
               value={kind}
@@ -191,13 +193,21 @@ const ExpenseEntryModal: React.FC<Props> = ({
                 { value: 'income', label: '收入', color: colors.success },
               ]}
             />
-            {expense ? (
-              <TouchableOpacity style={s.roundBtn} onPress={remove} accessibilityLabel="刪除這筆">
-                <Text style={s.deleteMark}>✕</Text>
-              </TouchableOpacity>
-            ) : (
-              <View style={s.roundBtn} />
-            )}
+            {/* 刪除用文字按鈕:原本的紅色 ✕ 跟左上角的「關閉」長得太像,容易按錯 */}
+            <View style={[s.headSide, s.headSideEnd]}>
+              {expense && (
+                <TouchableOpacity
+                  style={s.deleteBtn}
+                  onPress={remove}
+                  accessibilityRole="button"
+                  accessibilityLabel="刪除這筆紀錄"
+                >
+                  <Text style={s.deleteText} numberOfLines={1}>
+                    刪除紀錄
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
 
           <Segmented<ExpenseWho>
@@ -380,6 +390,10 @@ const s = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.sm,
   },
+  // 左右兩格等寬,中間的「支出 / 收入」才會一直置中——
+  // 右邊的「刪除紀錄」比左邊的圓鈕寬,單靠 space-between 會把分段控制擠歪
+  headSide: { flex: 1, minWidth: 72, alignItems: 'flex-start' },
+  headSideEnd: { alignItems: 'flex-end' },
   roundBtn: {
     width: 36,
     height: 36,
@@ -388,8 +402,17 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  deleteMark: { color: colors.danger, fontSize: 16, fontWeight: '700' },
-  kindSeg: { width: 180 },
+  deleteBtn: {
+    height: 36,
+    paddingHorizontal: 10,
+    borderRadius: radius.pill,
+    backgroundColor: colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteText: { color: colors.danger, fontSize: 13, fontWeight: '700' },
+  // 窄螢幕(360 寬)時兩側各留 8 的空隙,寧可讓分段控制縮一點,也不要貼著「刪除紀錄」
+  kindSeg: { width: 180, flexShrink: 1, marginHorizontal: spacing.sm },
   whoSeg: { marginHorizontal: spacing.lg },
 
   grid: { maxHeight: 246 },
