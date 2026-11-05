@@ -149,6 +149,15 @@ export interface CourseEntry {
   credit?: number;
   /** 授課教師 */
   teacher?: string;
+  /**
+   * 北科課程類別符號(○△☆●▲★,見 constants/ntut.ts)。
+   * 畢業門檻頁靠它判斷學分歸類;舊資料沒有這個欄位,可在畢業頁「補齊課程資料」。
+   */
+  ntutCourseType?: string;
+  /** 開課班級名稱(例如「資工三」「博雅課程(一)」),用來判斷本系課 / 博雅課 */
+  ntutClassNames?: string[];
+  /** 課程備註(例如「人文與藝術向度」「請選:通識中心 / 博雅課程」) */
+  ntutNotes?: string;
 }
 
 /** 學期:課表按學期分頁保存,起訖日用於行程衝突判斷 */
@@ -168,6 +177,82 @@ export const semesterOrder = (id: string): number => {
   const [y, s] = id.split('-').map(Number);
   return (y || 0) * 10 + (s || 0);
 };
+
+/**
+ * 畢業學分的類別。
+ *
+ * 對應北科課程標準的欄位:共同必修(○△)、通識博雅(△ 但另計向度與上限)、
+ * 共同選修(☆)、專業必修(●▲)、專業選修(★,本系)、跨域及自由選修(他系課與超修溢出)。
+ */
+export type CreditCategory =
+  | 'commonRequired'
+  | 'generalEd'
+  | 'commonElective'
+  | 'proRequired'
+  | 'proElective'
+  | 'free';
+
+/** 課程標準(北科課程系統 Cprog.jsp)裡的一列科目 */
+export interface StandardCourse {
+  /** 年級 1~4(無法解析時為 0) */
+  year: number;
+  /** 學期 1 或 2(無法解析時為 0) */
+  sem: number;
+  /** 類別符號 ○△☆●▲★ */
+  type: string;
+  name: string;
+  credit: number;
+  /** 分段修習進度,例如 '1/2';單一學期為 '1' */
+  stage: string;
+}
+
+/** 某入學年度、某系所的畢業課程標準(由北科課程好朋友的爬蟲資料取得) */
+export interface GraduationStandard {
+  /** 入學學年度(民國),例如 113 */
+  entryYear: number;
+  /** 學制,例如「四技」 */
+  system: string;
+  /** 系所,例如「資工系」 */
+  department: string;
+  /** 學分門檻(原始欄名 → 數值),例如 { 最低畢業學分數: 132, 校訂共同必修學分: 28 } */
+  credits: Record<string, number>;
+  courses: StandardCourse[];
+  /** 系所規定原文,逐條 */
+  rules: string[];
+  /** 下載時間(epoch ms) */
+  fetchedAt: number;
+}
+
+/** 手動加入的學分(抵免、轉學、暑修、他校課程⋯) */
+export interface ManualCredit {
+  id: string;
+  title: string;
+  credit: number;
+  category: CreditCategory;
+  /** 博雅向度(category 為 generalEd 時選填) */
+  dimension?: string;
+  /** 備註,例如「113-1 抵免」 */
+  note?: string;
+}
+
+/** 一位成員的畢業門檻計畫 */
+export interface GraduationPlan {
+  ownerId: string;
+  /** 套用的課程標準;未下載時沒有門檻,只統計已修學分 */
+  standard?: GraduationStandard;
+  /** 視為「本系」課程的開課班級前綴(例如 ['資工']);他系課程歸入跨域及自由選修 */
+  ownClassPrefixes: string[];
+  /** 不採計的課(不及格、停修、重修的舊紀錄),存 graduation.courseKey() */
+  excludedKeys: string[];
+  /** 人工改類別的課(courseKey → 類別) */
+  overrides: Record<string, CreditCategory>;
+  /** 改成博雅時指定的向度(courseKey → 向度) */
+  overrideDimensions?: Record<string, string>;
+  manualCredits: ManualCredit[];
+  /** 已確認的系所規定(存規定原文,重新下載標準時仍對得上) */
+  checkedRules: string[];
+  updatedAt: number;
+}
 
 export type FlowLevel = 'light' | 'medium' | 'heavy';
 
@@ -271,5 +356,7 @@ export interface AppData {
   courses: CourseEntry[];
   /** 已知的學期(匯入課表時建立) */
   semesters: SemesterMeta[];
+  /** 畢業門檻計畫(每位成員一份;未設定者沒有項目) */
+  graduation: GraduationPlan[];
   settings: AppSettings;
 }

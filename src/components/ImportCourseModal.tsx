@@ -269,6 +269,7 @@ const ImportCourseModal: React.FC<Props> = ({ visible, onClose, ownerId, onImpor
               {prepared.map((p) => (
                 <View key={p.courseId} style={s.courseRow}>
                   <Text style={s.courseTitle}>
+                    {p.courseType ? `${p.courseType} ` : ''}
                     {p.title}
                     {p.credit ? `(${p.credit} 學分)` : ''}
                   </Text>

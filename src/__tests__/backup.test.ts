@@ -101,6 +101,54 @@ test('缺少的區塊補成空陣列', () => {
   assert.deepEqual(r.data?.periods, []);
   assert.deepEqual(r.data?.courses, []);
   assert.deepEqual(r.data?.semesters, []);
+  assert.deepEqual(r.data?.graduation, []);
+});
+
+test('備份保留畢業門檻計畫,壞掉的課程標準丟掉但保留其他調整', () => {
+  const withPlan: AppData = {
+    ...sample,
+    graduation: [
+      {
+        ownerId: 'u1',
+        standard: {
+          entryYear: 113,
+          system: '四技',
+          department: '資工系',
+          credits: { 最低畢業學分數: 132 },
+          courses: [{ year: 1, sem: 1, type: '△', name: '國文', credit: 2, stage: '1' }],
+          rules: ['最低畢業學分:132 學分。'],
+          fetchedAt: 1,
+        },
+        ownClassPrefixes: ['資工'],
+        excludedKeys: ['ntut:1'],
+        overrides: { 'ntut:2': 'free' },
+        manualCredits: [{ id: 'm1', title: '抵免', credit: 3, category: 'proElective' }],
+        checkedRules: ['最低畢業學分:132 學分。'],
+        updatedAt: 5,
+      },
+    ],
+  };
+  const r = parseBackup(buildBackup(withPlan));
+  assert.equal(r.data?.graduation.length, 1);
+  assert.equal(r.data?.graduation[0].standard?.credits['最低畢業學分數'], 132);
+  assert.deepEqual(r.data?.graduation[0].excludedKeys, ['ntut:1']);
+  assert.equal(r.data?.graduation[0].manualCredits[0].credit, 3);
+
+  const broken = parseBackup(
+    JSON.stringify({
+      version: 1,
+      data: {
+        graduation: [
+          { ownerId: 'u1', standard: { entryYear: '113' }, manualCredits: [{ id: 'bad' }, 3] },
+          { noOwner: true },
+        ],
+      },
+    })
+  );
+  assert.equal(broken.data?.graduation.length, 1);
+  assert.equal(broken.data?.graduation[0].standard, undefined);
+  assert.deepEqual(broken.data?.graduation[0].manualCredits, []);
+  assert.deepEqual(broken.data?.graduation[0].ownClassPrefixes, []);
 });
 
 test('沒有成員資料時退回預設成員', () => {

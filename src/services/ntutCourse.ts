@@ -11,10 +11,9 @@
  */
 import { CourseEntry } from '../types';
 import { NTUT_LABEL_TO_INDEX, PERIOD_SLOTS, UNSCHEDULED_WEEKDAY, WEEKDAYS } from '../constants/timetable';
+import { NTUT_DATA_BASE_URL as BASE_URL } from '../constants/ntut';
 import { tagColor } from '../theme';
 import { uid } from '../utils/date';
-
-const BASE_URL = 'https://gnehs.github.io/ntut-course-crawler-node';
 
 /** course.json 解析結果 */
 export interface NtutSelection {
@@ -78,10 +77,15 @@ export interface NtutCourseRaw {
   id: string;
   name: { zh: string; en?: string };
   credit?: string;
+  /** 類別符號 ○△☆●▲★ */
   courseType?: string;
   time: Record<'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat', string[]>;
   classroom?: { name: string }[];
   teacher?: { name: string }[];
+  /** 開課班級(例如「資工三」「博雅課程(一)」) */
+  class?: { name: string }[];
+  /** 備註(博雅課的向度、占位科目的「請選:⋯」) */
+  notes?: string;
 }
 
 /** 下載整學期課程總表(gzip 後約 0.7MB) */
@@ -110,6 +114,11 @@ export interface PreparedCourse {
   runs: { weekday: number; start: number; end: number }[];
   /** 無法對應的時段說明(D 節、週末課) */
   skipped: string[];
+  /** 類別符號 ○△☆●▲★(畢業門檻頁用) */
+  courseType?: string;
+  /** 開課班級名稱 */
+  classNames: string[];
+  notes?: string;
 }
 
 const DAY_TO_WEEKDAY: Record<string, number> = { mon: 1, tue: 2, wed: 3, thu: 4, fri: 5 };
@@ -122,6 +131,24 @@ const DAY_ZH: Record<string, string> = {
   fri: '五',
   sat: '六',
 };
+
+/** 「3.0」→ 3;0 或非數字 → undefined(0 學分的體育等不顯示學分) */
+export function parseCredit(raw: string | undefined): number | undefined {
+  const credit = Number(raw);
+  return Number.isFinite(credit) && credit > 0 ? credit : undefined;
+}
+
+/** 畢業門檻頁需要的類別資料(符號、開課班級、備註) */
+export function courseMeta(raw: NtutCourseRaw): {
+  courseType?: string;
+  classNames: string[];
+  notes?: string;
+} {
+  const courseType = raw.courseType?.trim() || undefined;
+  const classNames = (raw.class ?? []).map((c) => c.name.trim()).filter(Boolean);
+  const notes = raw.notes?.trim() || undefined;
+  return { courseType, classNames, notes };
+}
 
 /** 依課號從學期總表挑出課程並轉成可匯入格式 */
 export function prepareCourses(
@@ -166,15 +193,15 @@ export function prepareCourses(
       }
       if (start >= 0) runs.push({ weekday, start, end: prev });
     }
-    const credit = Number(raw.credit);
     prepared.push({
       courseId: id,
       title: raw.name.zh.trim() || id,
-      credit: Number.isFinite(credit) && credit > 0 ? credit : undefined,
+      credit: parseCredit(raw.credit),
       teacher: raw.teacher?.map((t) => t.name).join('、') || undefined,
       location: raw.classroom?.map((r) => r.name).join('、') || undefined,
       runs,
       skipped,
+      ...courseMeta(raw),
     });
   }
   return { prepared, missing };
@@ -198,6 +225,9 @@ export function toCourseEntries(
       ntutCourseId: p.courseId,
       credit: p.credit,
       teacher: p.teacher,
+      ntutCourseType: p.courseType,
+      ntutClassNames: p.classNames.length ? p.classNames : undefined,
+      ntutNotes: p.notes,
     };
     if (p.runs.length === 0) {
       entries.push({ ...base, id: uid(), weekday: UNSCHEDULED_WEEKDAY, startPeriod: 0, endPeriod: 0 });
@@ -230,4 +260,30 @@ export function defaultSemesterRange(year: number, sem: number): { startDate: st
   return sem === 1
     ? { startDate: `${ce}-09-15`, endDate: `${ce + 1}-01-16` }
     : { startDate: `${ce + 1}-02-16`, endDate: `${ce + 1}-06-30` };
+}
+
+/**
+ * 為既有的匯入課程補上類別資料(ntutCourseType / ntutClassNames / ntutNotes)。
+ *
+ * 這些欄位是畢業門檻頁加入後才開始存的,先前匯入的課表沒有。
+ * 回傳需要更新的項目(已有資料或總表中找不到的課不動)。
+ */
+export function backfillCourseMeta(courses: CourseEntry[], all: NtutCourseRaw[]): CourseEntry[] {
+  const byId = new Map(all.map((c) => [c.id, c]));
+  const updated: CourseEntry[] = [];
+  for (const c of courses) {
+    if (!c.ntutCourseId || c.ntutCourseType) continue;
+    const raw = byId.get(c.ntutCourseId);
+    if (!raw) continue;
+    const meta = courseMeta(raw);
+    if (!meta.courseType) continue;
+    updated.push({
+      ...c,
+      ntutCourseType: meta.courseType,
+      ntutClassNames: meta.classNames.length ? meta.classNames : undefined,
+      ntutNotes: meta.notes,
+      credit: c.credit ?? parseCredit(raw.credit),
+    });
+  }
+  return updated;
 }
