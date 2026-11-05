@@ -69,6 +69,8 @@ interface AppContextValue {
   importCourses: (removeIds: string[], entries: CourseEntry[]) => void;
   // semesters
   upsertSemester: (meta: SemesterMeta) => void;
+  /** 記住某位成員的北科學號(下次從入口網站同步時自動帶入) */
+  setNtutStudentId: (ownerId: string, studentId: string) => void;
   // tags
   addCustomTag: (name: string) => void;
   removeCustomTag: (name: string) => void;
@@ -765,6 +767,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setData((d) => ({ ...d, settings: { ...d.settings, homeCourseOwnerId } }));
   }, []);
 
+  const setNtutStudentId = useCallback((ownerId: string, studentId: string) => {
+    setData((d) =>
+      d.settings.ntutStudentIds?.[ownerId] === studentId
+        ? d
+        : {
+            ...d,
+            settings: {
+              ...d.settings,
+              ntutStudentIds: { ...d.settings.ntutStudentIds, [ownerId]: studentId },
+            },
+          }
+    );
+  }, []);
+
   const setOnboarded = useCallback((onboarded: boolean) => {
     setData((d) => ({ ...d, settings: { ...d.settings, onboarded } }));
   }, []);
@@ -1013,6 +1029,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     deleteCourse,
     importCourses,
     upsertSemester,
+    setNtutStudentId,
     addCustomTag,
     removeCustomTag,
     addPeriodFieldName,
