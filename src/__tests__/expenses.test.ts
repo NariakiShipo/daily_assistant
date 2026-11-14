@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   amountFor,
   budgetState,
+  countsFor,
   categoryBreakdown,
   dailyExpenseTotals,
   formatShort,
@@ -106,6 +107,19 @@ test('visibleTo 在獨立一類時不把雙人帳列進個人明細', () => {
 
 test('visibleTo 在各算一半時把雙人帳列進個人明細', () => {
   assert.equal(visibleTo(sample, 'self', 'half').length, 4);
+});
+
+test('visibleTo 留著 0 元的帳', () => {
+  const zero = exp({ amount: 0, date: '2026-09-09', who: 'self' });
+  assert.deepEqual(visibleTo([zero], 'self', 'separate'), [zero]);
+  assert.deepEqual(visibleTo([zero], 'all', 'separate'), [zero]);
+});
+
+test('countsFor 照歸屬判斷,與金額無關', () => {
+  const zero = exp({ amount: 0, date: '2026-09-09', who: 'both' });
+  assert.equal(countsFor(zero, 'both', 'separate'), true);
+  assert.equal(countsFor(zero, 'self', 'half'), true);
+  assert.equal(countsFor(zero, 'self', 'separate'), false);
 });
 
 /* ── 分組與排行 ───────────────────────────────────────── */

@@ -118,7 +118,9 @@ const ExpenseEntryModal: React.FC<Props> = ({
   const selected = categoryId ? findCategory(data.expenseCategories, categoryId, kind) : null;
   const amount = calcValue(calc);
   const pending = calcPending(calc);
-  const canSave = !!categoryId && amount > 0;
+  // 0 元也記得起來(招待、全額折抵、換貨補 0 這種),只擋負數:金額欄沒有負號,
+  // 會變負的只有「50 － 100」這種算到一半的式子,那顯然還沒輸入完。
+  const canSave = !!categoryId && amount >= 0;
 
   const pickReceipt = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();

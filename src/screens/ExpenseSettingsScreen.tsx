@@ -54,6 +54,13 @@ const ExpenseSettingsScreen: React.FC<Props> = ({ onBack, onManageCategories }) 
   const [selfLimit, setSelfLimit] = useState(String(data.settings.budget?.self ?? ''));
   const [partnerLimit, setPartnerLimit] = useState(String(data.settings.budget?.partner ?? ''));
   const [draft, setDraft] = useState<RecurringExpense | null>(null);
+  /**
+   * 金額另外存一份使用者打的字串。
+   *
+   * 固定支出可以是 0 元,draft.amount 就分不出「還沒填」與「填了 0」了——
+   * 兩者都是數字 0。空字串 = 還沒填,'0' = 真的要記 0 元。
+   */
+  const [amountText, setAmountText] = useState('');
 
   /**
    * 邊打邊存,而不是等失焦才存:使用者填完直接按返回是很自然的動作,
@@ -74,6 +81,7 @@ const ExpenseSettingsScreen: React.FC<Props> = ({ onBack, onManageCategories }) 
       notify('請先建立一個支出分類');
       return;
     }
+    setAmountText('');
     setDraft({
       id: uid(),
       name: '',
@@ -87,13 +95,19 @@ const ExpenseSettingsScreen: React.FC<Props> = ({ onBack, onManageCategories }) 
     });
   };
 
+  const editRecurring = (r: RecurringExpense) => {
+    setAmountText(String(r.amount));
+    setDraft(r);
+  };
+
   const saveDraft = () => {
     if (!draft) return;
     if (!draft.name.trim()) {
       notify('請填一個名稱', '例如「房租」「Netflix」。');
       return;
     }
-    if (draft.amount <= 0) {
+    // 0 元也存得起來,只擋完全沒填的情況
+    if (!amountText) {
       notify('請填金額');
       return;
     }
@@ -208,7 +222,7 @@ const ExpenseSettingsScreen: React.FC<Props> = ({ onBack, onManageCategories }) 
           {data.recurringExpenses.map((r) => {
             const c = findCategory(data.expenseCategories, r.categoryId, r.kind);
             return (
-              <TouchableOpacity key={r.id} style={s.recurRow} onPress={() => setDraft(r)}>
+              <TouchableOpacity key={r.id} style={s.recurRow} onPress={() => editRecurring(r)}>
                 <CategoryIcon category={c} size={20} />
                 <View style={s.flex}>
                   <Text style={s.recurName}>{r.name}</Text>
@@ -281,10 +295,12 @@ const ExpenseSettingsScreen: React.FC<Props> = ({ onBack, onManageCategories }) 
             <Text style={s.label}>金額</Text>
             <TextInput
               style={s.input}
-              value={draft && draft.amount > 0 ? String(draft.amount) : ''}
-              onChangeText={(t) =>
-                setDraft((d) => (d ? { ...d, amount: Number(t.replace(/[^\d]/g, '')) || 0 } : d))
-              }
+              value={amountText}
+              onChangeText={(t) => {
+                const digits = t.replace(/[^\d]/g, '');
+                setAmountText(digits);
+                setDraft((d) => (d ? { ...d, amount: Number(digits) || 0 } : d));
+              }}
               keyboardType="number-pad"
               placeholder="12000"
               placeholderTextColor={colors.textMuted}

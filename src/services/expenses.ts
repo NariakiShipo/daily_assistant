@@ -35,6 +35,20 @@ export function amountFor(e: Expense, who: WhoFilter, split: SharedSplit): numbe
   return 0;
 }
 
+/**
+ * 這筆帳在某個歸屬下算不算數。
+ *
+ * 規則跟 amountFor 一樣,只是回傳「算不算」而不是「算多少」:0 元的帳金額雖然是 0,
+ * 仍然是一筆該列出來的紀錄,所以不能用「換算後金額大於 0」來當作看得到的條件。
+ */
+export function countsFor(e: Expense, who: WhoFilter, split: SharedSplit): boolean {
+  if (who === 'all') return true;
+  if (e.who === who) return true;
+  if (who === 'both') return false;
+  // who 是 self / partner,而這筆是雙人帳
+  return e.who === 'both' && split === 'half';
+}
+
 /** 'YYYY-MM' 月份鍵 */
 export const monthKey = (year: number, month: number): string =>
   `${year}-${String(month + 1).padStart(2, '0')}`;
@@ -83,7 +97,7 @@ export const onDate = (list: Expense[], date: string): Expense[] =>
  * 出現雙人帳,因為它一毛都沒算進小熊的數字,列出來只會讓合計對不起來。
  */
 export const visibleTo = (list: Expense[], who: WhoFilter, split: SharedSplit): Expense[] =>
-  list.filter((e) => amountFor(e, who, split) > 0);
+  list.filter((e) => countsFor(e, who, split));
 
 export interface DayGroup {
   date: string;
