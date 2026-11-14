@@ -7,42 +7,32 @@ import {
   View,
 } from 'react-native';
 import { useApp } from '../store/AppContext';
-import { FLOW_LABELS, FlowLevel, PeriodRecord } from '../types';
+import { FLOW_LABELS, PeriodRecord } from '../types';
 import { colors, radius, spacing, tagColor } from '../theme';
-import { addDays, daysBetween, formatDateZh, isValidDateKey, isWithin, todayKey, uid } from '../utils/date';
+import { addDays, daysBetween, formatDateZh, isWithin, todayKey } from '../utils/date';
 import { confirmDialog, notify } from '../utils/dialog';
 import { phaseNameZh } from '../services/periodPrediction';
 import { recommendations } from '../services/recommendations';
 import { cycleLengths, symptomCounts } from '../services/periodStats';
-import { Button, Card, Chip, SectionTitle } from '../components/ui';
+import { Button, Card, SectionTitle } from '../components/ui';
 import PeriodEditModal from '../components/PeriodEditModal';
+import PeriodRecordModal from '../components/PeriodRecordModal';
 import MiniCalendar from '../components/MiniCalendar';
-import PeriodCustomFields, { FieldRow, buildFieldRows, toCustomFields } from '../components/PeriodCustomFields';
-import PeriodSymptomFields from '../components/PeriodSymptomFields';
 
 const PeriodScreen: React.FC = () => {
-  const { data, prediction, phase, addPeriod, updatePeriod, deletePeriod, addCustomSymptom } =
-    useApp();
-  const [recorder, setRecorder] = useState(data.users[0]?.id ?? 'u1');
+  const { data, prediction, phase, deletePeriod } = useApp();
 
   const today = todayKey();
-  const [recordDate, setRecordDate] = useState(today);
-  /** 展開「補記其他日期」的日曆;預設收合、直接記今天 */
-  const [backfill, setBackfill] = useState(false);
+  /** 「記錄經期」表單是否開啟(與日曆頁新增行程一樣,按鈕按下才彈出表單填寫) */
+  const [recording, setRecording] = useState(false);
   const [editing, setEditing] = useState<PeriodRecord | null>(null);
-  // 記錄當下的自訂欄位(預設帶出記住的欄位範本)
-  const [recordFields, setRecordFields] = useState<FieldRow[]>(() =>
-    buildFieldRows(data.settings.periodFieldNames ?? [], [])
-  );
-  const [recordFlow, setRecordFlow] = useState<FlowLevel | null>(null);
-  const [recordSymptoms, setRecordSymptoms] = useState<string[]>([]);
   const sorted = useMemo(
     () => [...data.periods].sort((a, b) => b.startDate.localeCompare(a.startDate)),
     [data.periods]
   );
   const ongoing = sorted.find((p) => !p.endDate);
 
-  /** 已記錄的經期日(供記錄日曆參考顯示) */
+  /** 已記錄的經期日(供預測日曆與記錄表單的日曆參考顯示) */
   const periodDays = useMemo(() => {
     const set = new Set<string>();
     for (const p of data.periods) {
@@ -57,49 +47,6 @@ const PeriodScreen: React.FC = () => {
   }, [data.periods]);
 
   const recorderName = (id: string) => data.users.find((u) => u.id === id)?.name ?? '?';
-
-  const validRecordDate = (): boolean => {
-    if (!isValidDateKey(recordDate)) {
-      notify('日期格式錯誤', '請用 YYYY-MM-DD');
-      return false;
-    }
-    if (recordDate > today) {
-      notify('日期不能在未來');
-      return false;
-    }
-    return true;
-  };
-
-  const startPeriod = () => {
-    if (ongoing) {
-      return notify('已有進行中的紀錄', '請先記錄上一次經期結束。');
-    }
-    if (!validRecordDate()) return;
-    const rec: PeriodRecord = {
-      id: uid(),
-      startDate: recordDate,
-      recordedBy: recorder,
-      customFields: toCustomFields(recordFields),
-      flow: recordFlow ?? undefined,
-      symptoms: recordSymptoms.length ? recordSymptoms : undefined,
-    };
-    addPeriod(rec);
-    notify('已記錄', `經期開始:${formatDateZh(recordDate)}(由 ${recorderName(recorder)} 記錄)`);
-    // 重設為空白範本,供下次記錄使用
-    setRecordFields(buildFieldRows(data.settings.periodFieldNames ?? [], []));
-    setRecordFlow(null);
-    setRecordSymptoms([]);
-  };
-
-  const endPeriod = () => {
-    if (!ongoing) return;
-    if (!validRecordDate()) return;
-    if (recordDate < ongoing.startDate) {
-      return notify('結束日期不能早於開始日期', `這次經期從 ${formatDateZh(ongoing.startDate)} 開始。`);
-    }
-    updatePeriod({ ...ongoing, endDate: recordDate });
-    notify('已記錄', `經期結束:${formatDateZh(recordDate)}`);
-  };
 
   const removeRecord = (p: PeriodRecord) => {
     confirmDialog(
@@ -188,77 +135,18 @@ const PeriodScreen: React.FC = () => {
         </Card>
       )}
 
-      {/* 記錄操作 */}
+      {/* 記錄操作:只留一顆按鈕,日期與細節到彈出的表單裡填(與日曆頁新增行程相同的方式) */}
       <Card>
         <SectionTitle>記錄經期</SectionTitle>
-        <Text style={s.label}>由誰記錄?(家人/伴侶也可以協助)</Text>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: spacing.xs }}>
-          {data.users.map((u) => (
-            <Chip
-              key={u.id}
-              label={u.name}
-              color={u.color}
-              active={recorder === u.id}
-              onPress={() => setRecorder(u.id)}
-            />
-          ))}
-        </View>
-        {/* 純按鈕記錄:預設記今天;要補記過去日期才展開日曆 */}
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-          <Chip
-            label="📅 補記其他日期"
-            active={backfill}
-            onPress={() => {
-              if (backfill) setRecordDate(today); // 收合時回到今天
-              setBackfill(!backfill);
-            }}
-          />
-          {backfill && recordDate !== today && (
-            <Chip label="回到今天" color={colors.textMuted} onPress={() => setRecordDate(today)} />
-          )}
-        </View>
-        {backfill && (
-          <>
-            <Text style={[s.label, { marginTop: spacing.xs }]}>
-              點選日曆選擇記錄日期(粉色為已記錄的經期日)
-            </Text>
-            <MiniCalendar
-              selected={recordDate}
-              onSelect={setRecordDate}
-              maxDate={today}
-              getMark={(key) =>
-                periodDays.has(key) ? { bg: colors.periodDay } : undefined
-              }
-            />
-          </>
-        )}
-        {!ongoing && (
-          <>
-            <PeriodSymptomFields
-              flow={recordFlow}
-              onChangeFlow={setRecordFlow}
-              symptoms={recordSymptoms}
-              onChangeSymptoms={setRecordSymptoms}
-              customSymptoms={data.settings.customSymptoms ?? []}
-              onAddCustomSymptom={addCustomSymptom}
-            />
-            <Text style={[s.label, { marginTop: spacing.md }]}>
-              自訂紀錄(選填,例如:經前痛持續時間)
-            </Text>
-            <PeriodCustomFields fields={recordFields} onChange={setRecordFields} />
-          </>
-        )}
-        {!ongoing ? (
-          <Button
-            label={`🩸 記錄經期開始(${recordDate === today ? '今天' : formatDateZh(recordDate)})`}
-            onPress={startPeriod}
-          />
-        ) : (
-          <Button
-            label={`✅ 記錄經期結束(${recordDate === today ? '今天' : formatDateZh(recordDate)})`}
-            onPress={endPeriod}
-          />
-        )}
+        <Text style={s.label}>
+          {ongoing
+            ? `經期進行中(自 ${formatDateZh(ongoing.startDate)} 起),結束時按下方按鈕記錄結束日。`
+            : '按下方按鈕,在表單裡選擇日期(預設今天)並填寫經血量、症狀等細節。'}
+        </Text>
+        <Button
+          label={ongoing ? '✅ 記錄經期結束' : '🩸 記錄經期開始'}
+          onPress={() => setRecording(true)}
+        />
       </Card>
 
       {/* 建議 */}
@@ -361,6 +249,12 @@ const PeriodScreen: React.FC = () => {
         </TouchableOpacity>
       ))}
 
+      <PeriodRecordModal
+        visible={recording}
+        onClose={() => setRecording(false)}
+        ongoing={ongoing ?? null}
+        periodDays={periodDays}
+      />
       <PeriodEditModal visible={!!editing} record={editing} onClose={() => setEditing(null)} />
     </ScrollView>
   );
