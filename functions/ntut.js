@@ -468,6 +468,18 @@ function parsePeriods(text) {
 /** 「六教226(e)」的 (e) 是 e 化教室標記,不是教室名稱的一部分 */
 const stripEClassroom = (name) => name.replace(/\s*[(（]\s*e\s*[)）]\s*$/i, '');
 
+/**
+ * 課程類別符號 ○△☆●▲★(畢業門檻頁靠它歸類學分)。
+ *
+ * 選課表的「修」欄不一定是這六個符號——開源北科 App 抓到的真實頁面寫的是「必」「選」。
+ * 認不得就不填:前端的「補齊課程資料」只補「沒有類別」的課,填了別的字反而永遠補不到。
+ */
+const COURSE_TYPE_SYMBOLS = new Set(['○', '△', '☆', '●', '▲', '★']);
+const courseTypeOf = (text) => {
+  const t = text.replace(/\s+/g, '');
+  return COURSE_TYPE_SYMBOLS.has(t) ? t : undefined;
+};
+
 /** 表頭上方那一列:「學號:111590001 姓名:王小明 班級:智動一 111 學年度 第 1 學期」 */
 function parseHeaderInfo(text) {
   const pick = (re) => re.exec(text)?.[1];
@@ -485,7 +497,8 @@ function parseHeaderInfo(text) {
  * 解析選課表(Select.jsp?format=-2)。
  *
  * 頁面上有兩張表:上面是節次 × 星期的格子,下面是逐門課的清單。
- * 只讀下面那張:每門課一列,星期欄直接寫節次代號,也有學分、教師、教室與選課狀況。
+ * 只讀下面那張:每門課一列,星期欄直接寫節次代號,也有學分、教師、教室與選課狀況,
+ * 以及畢業門檻頁要的類別符號(修)、開課班級與備註。
  * 欄位一律依表頭文字找,不寫死第幾欄——學校加減欄位時才不會整個錯位。
  *
  * 回傳的 courses 與北科課程好朋友的課程格式相容(前端共用同一套轉換)。
@@ -518,6 +531,9 @@ function parseTimetable(html) {
     teacher: col((l) => l === '教師'),
     room: col((l) => l === '教室'),
     status: col((l) => l.endsWith('狀況')),
+    type: col((l) => l === '修'),
+    class: col((l) => l === '班級'),
+    notes: col((l) => l === '備註'),
   };
   const dayIdx = DAY_COLUMNS.map(([zh, key]) => [key, labels.indexOf(zh)]);
 
@@ -547,6 +563,10 @@ function parseTimetable(html) {
         .map(stripEClassroom)
         .filter(Boolean)
         .map((n) => ({ name: n })),
+      // 以下給畢業門檻頁,欄位名稱與北科課程好朋友的資料相同
+      courseType: courseTypeOf(text(idx.type)),
+      class: cellNames(cells[idx.class]).map((n) => ({ name: n })),
+      notes: text(idx.notes) || undefined,
     });
   }
 

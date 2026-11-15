@@ -183,6 +183,24 @@ test('選課表:沒有課號的班週會、沒有時間的專題', () => {
   assert.equal(project.teacher.length, 2);
 });
 
+test('選課表:畢業門檻頁要的類別符號、開課班級與備註', () => {
+  const { courses } = parseTimetable(TIMETABLE);
+  const os = byName(courses, '作業系統');
+  assert.equal(os.courseType, '★');
+  assert.deepEqual(os.class, [{ name: '資工三' }]);
+  assert.equal(os.notes, undefined); // 只有全形空白不算備註
+  assert.equal(byName(courses, '機率與統計').courseType, '▲');
+  assert.equal(byName(courses, '英文簡報').courseType, '☆');
+  assert.deepEqual(byName(courses, '英文簡報').class, [{ name: '通識' }]);
+  assert.equal(byName(courses, '計算機網路').notes, '◎');
+  assert.equal(byName(courses, '微處理機實驗').notes, '*分組實驗');
+  // 「必」不是類別符號:不填,前端的「補齊課程資料」才補得到
+  assert.equal(byName(courses, '服務學習').courseType, undefined);
+  const meeting = byName(courses, '班週會及導師時間');
+  assert.equal(meeting.courseType, undefined);
+  assert.deepEqual(meeting.class, []);
+});
+
 test('選課表:學校送 Big5 又沒宣告編碼時一樣解得出來', () => {
   const decoded = decodeBody(big5Encode(TIMETABLE), 'text/html');
   assert.deepEqual(parseTimetable(decoded), parseTimetable(TIMETABLE));

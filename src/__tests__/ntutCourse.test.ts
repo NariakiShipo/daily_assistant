@@ -73,6 +73,31 @@ test('入口網站的課程:中午 N 節、晚上 A~C 節對到課表,D 節與�
   assert.equal(sat.credit, undefined); // 0 學分不計
 });
 
+test('入口網站的課程帶著畢業門檻頁要的類別資料', () => {
+  const os = byTitle('作業系統');
+  assert.equal(os.courseType, '★');
+  assert.deepEqual(os.classNames, ['資工三']);
+  assert.equal(byTitle('微處理機實驗').notes, '*分組實驗');
+
+  const [entry] = toCourseEntries([os], 'u1', '115-1');
+  assert.equal(entry.ntutCourseType, '★');
+  assert.deepEqual(entry.ntutClassNames, ['資工三']);
+});
+
+test('入口網站沒給類別符號的課(「修」欄寫「必」)之後還補得到', () => {
+  const [service] = toCourseEntries([byTitle('服務學習')], 'u1', '115-1');
+  assert.equal(service.ntutCourseType, undefined);
+  assert.equal(service.ntutCourseId, '350310');
+
+  // 畢業頁的「補齊課程資料」用課號去北科課程好朋友的總表查
+  const emptyTime = { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
+  const catalog: NtutCourseRaw[] = [
+    { id: '350310', name: { zh: '服務學習' }, credit: '0', courseType: '△', time: emptyTime, class: [{ name: '資工三' }] },
+  ];
+  const [filled] = backfillCourseMeta([service], catalog);
+  assert.equal(filled?.ntutCourseType, '△');
+});
+
 test('轉成課表項目:沒有課號的班週會不寫 ntutCourseId,沒有時間的課放無時段欄', () => {
   const entries = toCourseEntries(
     [byTitle('班週會及導師時間'), byTitle('實務專題(一)')],
