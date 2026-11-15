@@ -250,7 +250,7 @@ const GraduationScreen: React.FC = () => {
           {summary.unknownImported > 0 && (
             <>
               <Text style={s.warn}>
-                ⚠ {summary.unknownImported} 門先前匯入的課程沒有類別資料(新版才會存),補齊後才會算進進度。
+                ⚠ {summary.unknownImported} 門匯入的課程沒有類別資料(舊版匯入的課,或北科選課表上沒寫類別符號的課),補齊後才會算進進度。
               </Text>
               <Button
                 label={backfilling ? '下載課程總表中…' : '補齊課程資料'}
@@ -313,8 +313,7 @@ const GraduationScreen: React.FC = () => {
         <SectionTitle>已修課程(課表匯入)</SectionTitle>
         {summary.courses.length === 0 ? (
           <Text style={s.hint}>
-            「{ownerName}」還沒有課程。到課表頁或用上方「匯入歷年課表」,把每個學期在北科課程好朋友匯出的
-            course.json 匯進來(含已修完的學期),就會自動統計學分。
+            {`「${ownerName}」還沒有課程。用上方「匯入歷年課表」登入北科入口網站,在預覽切換學期把每個學期(含已修完的)都匯進來,就會自動統計學分;也可以改用北科課程好朋友匯出的 course.json。`}
           </Text>
         ) : (
           <Text style={s.hint}>點課程可設為不採計(不及格 / 停修 / 重修舊紀錄)或改類別。</Text>

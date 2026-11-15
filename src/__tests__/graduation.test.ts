@@ -174,6 +174,22 @@ test('classifyCourse:沒有類別符號的手動課程標為 unknown', () => {
   assert.match(c.reason ?? '', /手動/);
 });
 
+test('入口網站同步的班週會(沒課號、沒學分)不算修過的課,其他照常', () => {
+  const base = { weekday: 2, startPeriod: 4, endPeriod: 4, ownerId: 'u1', semesterId: '115-1' };
+  const courses: CourseEntry[] = [
+    // 入口網站選課表上的班級活動:不該出現在畢業頁,也不該被提醒補類別
+    { ...base, id: 'a', title: '班週會及導師時間', source: 'ntut' },
+    // 有課號、0 學分(服務學習之類):留著,「補齊課程資料」補得到
+    { ...base, id: 'b', title: '服務學習', source: 'ntut', ntutCourseId: '350310' },
+    // 手動建立、沒有學分的課:使用者自己加的,照樣列出
+    { ...base, id: 'c', title: '社團' },
+  ];
+  assert.deepEqual(
+    groupTakenCourses(courses, 'u1').map((t) => t.title),
+    ['服務學習', '社團']
+  );
+});
+
 test('isPlaceholderCourse / isOwnDepartment', () => {
   assert.equal(isPlaceholderCourse({ title: '體育', notes: '請選:體育室 \\ 體育專項', type: '△' }), true);
   assert.equal(isPlaceholderCourse({ title: '學院指定向度-人文與藝術', type: '△' }), true);

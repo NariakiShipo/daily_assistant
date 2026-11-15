@@ -54,6 +54,9 @@ export function groupTakenCourses(courses: CourseEntry[], ownerId: string): Take
   const map = new Map<string, TakenCourse>();
   for (const c of courses) {
     if (c.ownerId !== ownerId) continue;
+    // 班週會及導師時間這類班級活動:從北科入口網站同步時選課表會列出來,但沒有課號、不計學分,
+    // 「補齊課程資料」也查不到——當成修過的課的話,畢業頁會永遠提醒它缺類別。
+    if (c.source === 'ntut' && !c.ntutCourseId && !c.credit) continue;
     const key = courseKey(c);
     const cur = map.get(key);
     if (cur) {
