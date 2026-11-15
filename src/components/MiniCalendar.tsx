@@ -87,6 +87,8 @@ const MiniCalendar: React.FC<Props> = ({
                 s.cell,
                 !!mark?.bg && { backgroundColor: mark.bg },
                 !!mark?.border && { borderWidth: 1.5, borderColor: mark.border },
+                // 今天:粉色外框 + 粗體數字,與日曆頁的「今天」一致
+                isToday && s.cellToday,
                 isSelected && s.cellSelected,
               ]}
             >
@@ -154,6 +156,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     borderRadius: radius.sm,
   },
+  cellToday: { borderWidth: 2, borderColor: colors.primary },
   cellSelected: { borderWidth: 2, borderColor: colors.primary },
   cellDay: { fontSize: 13, color: colors.text },
   todayText: { fontWeight: '900', color: colors.primary },

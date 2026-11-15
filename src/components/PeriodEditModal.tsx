@@ -126,7 +126,8 @@ const PeriodEditModal: React.FC<Props> = ({ visible, onClose, record }) => {
               maxDate={today}
               initialMonth={startDate || undefined}
               getMark={(key) => {
-                if (key === startDate) return { bg: colors.periodDay, border: colors.primary };
+                // 開始日用粗體標示;粉色外框留給「今天」
+                if (key === startDate) return { bg: colors.periodDay, textBold: true };
                 if (endDate && isWithin(key, startDate, endDate))
                   return { bg: colors.periodDay };
                 return undefined;
