@@ -49,9 +49,23 @@ export const MODULES: ModuleMeta[] = [
     icon: 'timetable',
     description: '每人一份,含匯入與衝突',
   },
+  {
+    key: 'graduation',
+    label: '畢業',
+    icon: 'graduation',
+    description: '學分進度與畢業門檻',
+    isNew: true,
+  },
 ];
 
 const MODULE_KEYS = MODULES.map((m) => m.key);
+
+/**
+ * 沒有設定時的預設導覽列:清單最前面的 MAX_NAV_MODULES 個。
+ * 模組比導覽列的格子多,排在後面的(畢業)預設只在側邊選單,要用再自己放上導覽列——
+ * 這樣舊使用者的導覽列也不會因為多了一個模組而變樣。
+ */
+const DEFAULT_NAV_MODULES = MODULE_KEYS.slice(0, MAX_NAV_MODULES);
 
 export const moduleMeta = (key: ModuleKey): ModuleMeta =>
   MODULES.find((m) => m.key === key) ?? MODULES[0];
@@ -59,11 +73,11 @@ export const moduleMeta = (key: ModuleKey): ModuleMeta =>
 /**
  * 正規化導覽列設定。
  *
- * 未設定時給全部模組(目前剛好 4 個);去掉不認得的鍵與重複,並截到上限。
+ * 未設定時給預設的前 4 個;去掉不認得的鍵與重複,並截到上限。
  * 全部被濾掉時退回預設,不然會生出一條空的導覽列,使用者只剩 Home 可按。
  */
 export function normalizeNavModules(raw: ModuleKey[] | undefined): ModuleKey[] {
-  if (!raw) return [...MODULE_KEYS];
+  if (!raw) return [...DEFAULT_NAV_MODULES];
   const seen = new Set<ModuleKey>();
   const out: ModuleKey[] = [];
   for (const k of raw) {
@@ -72,7 +86,7 @@ export function normalizeNavModules(raw: ModuleKey[] | undefined): ModuleKey[] {
     out.push(k);
     if (out.length === MAX_NAV_MODULES) break;
   }
-  return out.length ? out : [...MODULE_KEYS];
+  return out.length ? out : [...DEFAULT_NAV_MODULES];
 }
 
 /**

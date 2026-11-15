@@ -16,6 +16,7 @@ import { StatusBar } from 'expo-status-bar';
 import { AppProvider, useApp } from './src/store/AppContext';
 import CalendarScreen from './src/screens/CalendarScreen';
 import ExpenseScreen, { ExpenseSubView } from './src/screens/ExpenseScreen';
+import GraduationScreen from './src/screens/GraduationScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import LoginScreen from './src/screens/LoginScreen';
 import PeriodScreen from './src/screens/PeriodScreen';
@@ -185,6 +186,8 @@ const Main: React.FC = () => {
         return <PeriodScreen />;
       case 'timetable':
         return <TimetableScreen />;
+      case 'graduation':
+        return <GraduationScreen />;
       default:
         return null;
     }

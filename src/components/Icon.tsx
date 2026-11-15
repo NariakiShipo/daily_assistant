@@ -44,6 +44,7 @@ export type IconName =
   | 'wallet'
   | 'period'
   | 'timetable'
+  | 'graduation'
   | 'settings'
   | 'report'
   | 'back'
@@ -212,6 +213,13 @@ const Icon: React.FC<Props> = ({ name, size = 24, color = colors.text, strokeWid
       )}
       {name === 'timetable' && (
         <Path d="M4 5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2zM4 21V5M9 8h7" {...stroke} />
+      )}
+      {name === 'graduation' && (
+        // 學士帽:菱形帽頂、下面的帽身,右邊垂一條帽穗
+        <Path
+          d="M2 9.5 12 4.5l10 5-10 5zM6 11.5V16c0 1.66 2.69 3 6 3s6-1.34 6-3v-4.5M22 9.5V15"
+          {...stroke}
+        />
       )}
       {name === 'settings' && (
         <>

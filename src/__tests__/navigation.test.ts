@@ -10,15 +10,21 @@ import {
   splitNav,
   visibleHomeCards,
 } from '../services/navigation';
-import { HomeCardPref, ModuleKey } from '../types';
+import { HomeCardPref, MAX_NAV_MODULES, ModuleKey } from '../types';
 
 /* ── 導覽列 ───────────────────────────────────────────── */
 
-test('normalizeNavModules 未設定時給全部模組', () => {
-  assert.deepEqual(
-    normalizeNavModules(undefined),
-    MODULES.map((m) => m.key)
-  );
+/** 沒有設定時的導覽列:舊使用者原本就是這 4 個,加了畢業之後也不能變 */
+const DEFAULT_NAV: ModuleKey[] = ['calendar', 'expense', 'period', 'timetable'];
+
+test('normalizeNavModules 未設定時給前 4 個,畢業只在側邊選單', () => {
+  assert.deepEqual(normalizeNavModules(undefined), DEFAULT_NAV);
+  assert.ok(MODULES.length > MAX_NAV_MODULES, '模組比導覽列格子多,才需要預設只放前幾個');
+  assert.ok(MODULES.some((m) => m.key === 'graduation'));
+});
+
+test('normalizeNavModules 可以把畢業放上導覽列', () => {
+  assert.deepEqual(normalizeNavModules(['graduation', 'calendar']), ['graduation', 'calendar']);
 });
 
 test('normalizeNavModules 保留使用者選的順序', () => {
@@ -33,15 +39,17 @@ test('normalizeNavModules 去掉不認得的鍵與重複', () => {
 test('normalizeNavModules 截到 4 個', () => {
   const raw: ModuleKey[] = ['calendar', 'expense', 'period', 'timetable'];
   assert.equal(normalizeNavModules([...raw, 'calendar']).length, 4);
+  // 5 個都不重複時,多出來的第 5 個被截掉
+  assert.deepEqual(normalizeNavModules([...raw, 'graduation']), raw);
 });
 
 test('normalizeNavModules 全被濾掉時退回預設,不會給空導覽列', () => {
   const raw = ['ghost'] as unknown as ModuleKey[];
-  assert.equal(normalizeNavModules(raw).length, MODULES.length);
+  assert.deepEqual(normalizeNavModules(raw), DEFAULT_NAV);
 });
 
 test('normalizeNavModules 空陣列也退回預設', () => {
-  assert.equal(normalizeNavModules([]).length, MODULES.length);
+  assert.deepEqual(normalizeNavModules([]), DEFAULT_NAV);
 });
 
 test('navSlot 從 1 起算,不在導覽列上是 0', () => {

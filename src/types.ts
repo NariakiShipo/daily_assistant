@@ -380,7 +380,7 @@ export interface AppSettings {
 /* ───────────────────── 導覽與 Home ───────────────────── */
 
 /** 可以放進底部導覽列的功能模組 */
-export type ModuleKey = 'calendar' | 'expense' | 'period' | 'timetable';
+export type ModuleKey = 'calendar' | 'expense' | 'period' | 'timetable' | 'graduation';
 
 /** 底部導覽列最多放幾個模組(左右各 2,中間留給 Home) */
 export const MAX_NAV_MODULES = 4;
