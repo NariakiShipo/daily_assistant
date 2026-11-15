@@ -110,9 +110,9 @@ const PeriodScreen: React.FC = () => {
             (採用 {prediction.sampleCount} 個週期樣本)
           </Text>
           <View style={{ marginTop: spacing.md }}>
+            {/* 不指定 initialMonth:預設顯示今天所在的月份(今天有粉色外框),
+                預測區間與最可能開始日往後翻月份即可看到 */}
             <MiniCalendar
-              key={prediction.nextStart}
-              initialMonth={prediction.nextStart}
               getMark={(key) => {
                 // 最可能開始日:實心主色、白色粗體日期(取代原本的框線方框)
                 if (key === prediction.nextStart)
