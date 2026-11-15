@@ -139,7 +139,7 @@ export interface CourseEntry {
   color?: string;
   /** 這是誰的課表 */
   ownerId: string;
-  /** 匯入來源:'ntut' = 北科課程好朋友;未設 = 手動建立 */
+  /** 匯入來源:'ntut' = 從北科匯入(入口網站或北科課程好朋友);未設 = 手動建立 */
   source?: 'ntut';
   /** 所屬學期(SemesterMeta.id,例如 '115-1');未設 = 未分類(舊資料) */
   semesterId?: string;
@@ -281,6 +281,11 @@ export interface AppSettings {
   homeCards?: HomeCardPref[];
   /** Home 的「今日課程」看誰的課表(未設 = 主要使用者) */
   homeCourseOwnerId?: string;
+  /**
+   * 每位成員的北科學號(成員 id → 學號),從入口網站同步課表時自動帶入。
+   * 只存在這台裝置;密碼一律不存。
+   */
+  ntutStudentIds?: Record<string, string>;
   /** 是否走完「登入 → 選常用功能」;false 時進 App 會先到登入頁 */
   onboarded?: boolean;
   /** 是否看過首次使用教學;可從側邊選單「重看使用教學」重設 */

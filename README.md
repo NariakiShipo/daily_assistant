@@ -73,7 +73,11 @@
 ### 📚 課表
 - **今天卡片**:上課中(含進度條)/ 下一堂是什麼、在哪間教室、還有多久,加上當天完整課表
 - 每位成員一份課表,點格子新增、點色塊編輯
-- **匯入北科課表**:從[北科課程好朋友](https://ntut-course.gnehs.net)匯出選課 JSON(選檔或貼上),自動抓課名/時間/教室/老師填入
+- **從北科入口網站同步**:輸入學號與入口網站密碼,直接讀學校課程系統裡的選課表,
+  自動填入課名/時間/教室/老師/學分;可切換學期,加退選後再同步一次就會更新
+  (已撤選的課不會匯入)。密碼只用於這次登入,App 與後端都不儲存;學號會記在這台裝置,
+  下次自動帶入。需要部署 Functions 並登入帳號(見下方「北科課表同步」)
+- 備用:從[北科課程好朋友](https://ntut-course.gnehs.net)匯出選課 JSON(選檔或貼上)匯入
 - 課表按**學期**分頁保存(115-1、115-2⋯),可回顧歷學期;顯示課數/學分/班級統計
 - 重複匯入時可選「只覆蓋課表(保留手動課程)」或「全部覆蓋」
 - 匯入後自動掃描學期內與上課時間重疊的個人行程,可**截短讓出上課時間**、調整時間、刪除或略過
@@ -113,7 +117,7 @@ npm install        # 若曾安裝失敗,先 rm -rf node_modules 再執行
 npm start          # 掃 QR code 用 Expo Go 開啟
 npm run web        # 瀏覽器執行(開發用)
 npm run build:web  # 建置網頁版(含 PWA 標籤注入;部署前用這個)
-npm test           # 單元測試(純函式:日期、經期預測、課表衝突、重複展開)
+npm test           # 單元測試(純函式:日期、經期預測、課表衝突、重複展開、北科選課表解析)
 npm run typecheck  # 型別檢查
 ```
 
@@ -167,6 +171,25 @@ Firestore `googleTokens/{uid}`(規則擋死前端存取),之後 access token 過
 - 未部署 Functions 時退回舊行為:登入順手連接的 token 約 1 小時過期,需重新授權
 - 共同編輯同個日曆:`createSharedCalendar()` 建共用日曆 → `shareCalendarWith(對方email)` 加為編輯者
 - 快速測試也可在 [OAuth Playground](https://developers.google.com/oauthplayground) 取 token 貼到設定頁
+
+## 北科課表同步(fetchNtutTimetable)
+
+課表頁「⬇ 匯入課表」→「北科入口網站」由 Functions 的 `fetchNtutTimetable` 代為讀取
+(`functions/ntut.js`)。要經過後端,是因為學校的伺服器沒有 CORS,網頁版 / PWA 的瀏覽器
+讀不到回應;手機版也走同一條路,學校改版時只要重新部署 Functions,不必重新打包 App。
+
+流程與北科官方 App 走同一組端點:`app.ntut.edu.tw/login.do` 登入 →
+`ssoIndex.do?apOu=aa_0010-oauth` 換課程系統的 SSO 表單 → `aps.ntut.edu.tw/course/tw/Select.jsp`
+讀學期清單與選課表,解析表格後回傳。
+
+- **不需要額外的 secret**:跟著 `npx firebase deploy --only functions` 一起部署即可
+- **必須登入 Daily Bear 帳號**,而且每個帳號 10 分鐘內最多 10 次(紀錄在 Firestore
+  `ntutRateLimits/{uid}`,前端規則擋死)——北科帳號連續輸錯密碼會被鎖,沒有上限的話
+  這支函式就能被拿來替別人的學號亂試密碼
+- **密碼**:只轉送給 `login.do` 這一次,不存 Firestore、不寫 log(log 只有 uid 與失敗原因代碼)
+- **除錯**:Cloud Logging 搜尋 `fetchNtutTimetable`,`reason` 是失敗原因
+  (`wrong-credentials`、`sso-failed`、`session-expired`、`unexpected` = 頁面解析不了⋯)。
+  一直失敗時可以先改用北科課程好朋友的 JSON 匯入
 
 ## 啟用 Firebase 跨裝置即時共享(已內建)
 
@@ -246,6 +269,8 @@ src/
     firebaseSync.ts        # Firestore 即時同步(配對碼制)
     expenses.ts            # 記帳的歸屬、拆帳、統計與固定支出(純計算,有單元測試)
     calculator.ts          # 記一筆的加減計算機
+    ntutCourse.ts          # 北科課表 → 課表格子的轉換、後端回傳檢查與錯誤訊息(純計算,有單元測試)
+    ntutPortal.ts          # 呼叫後端 fetchNtutTimetable(從北科入口網站讀選課表)
     navigation.ts          # 導覽列模組與 Home 卡片的設定正規化(純計算,有單元測試)
   screens/                 # 登入 / 選常用功能 / Home / 日曆 / 記帳 / 經期 / 課表 / 設定
   components/              # 共用 UI、導覽列、側邊選單、教學打光、線條圖示與圖表
