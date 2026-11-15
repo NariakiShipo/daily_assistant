@@ -8,12 +8,14 @@
  *   搭配 firestore.rules 禁止列舉所有空間
  *
  * 結構:
- *   spaces/{code}            { users, createdAt }
+ *   spaces/{code}            { users, semesters, expenseCategories, recurringExpenses,
+ *                              graduation, createdAt }
  *   spaces/{code}/events/{id}
  *   spaces/{code}/periods/{id}
+ *   spaces/{code}/courses/{id}
  *   spaces/{code}/expenses/{id}
  *
- * 記帳分類與固定支出是小量且整份一起改的設定,放在空間根文件上,
+ * 記帳分類、固定支出與畢業計畫是小量且整份一起改的設定,放在空間根文件上,
  * 不另開子集合(跟 semesters 一樣)。
  */
 import { initializeApp, FirebaseApp } from 'firebase/app';
@@ -37,6 +39,7 @@ import {
   CourseEntry,
   Expense,
   ExpenseCategory,
+  GraduationPlan,
   PeriodRecord,
   RecurringExpense,
   SemesterMeta,
@@ -129,7 +132,8 @@ export async function uploadLocal(
   periods: PeriodRecord[],
   courses: CourseEntry[],
   semesters?: SemesterMeta[],
-  expenses?: Expense[]
+  expenses?: Expense[],
+  graduation?: GraduationPlan[]
 ): Promise<void> {
   const d = getDb();
   if (!d) return;
@@ -140,6 +144,29 @@ export async function uploadLocal(
   for (const e of expenses ?? []) batch.set(doc(d, 'spaces', code, 'expenses', e.id), e);
   await batch.commit();
   if (semesters?.length) await mergeSemesters(code, semesters);
+  if (graduation?.length) await mergeGraduationPlans(code, graduation);
+}
+
+/** 畢業計畫(每位成員一份)存在空間根文件上,整份覆蓋 */
+export async function saveGraduationPlans(code: string, plans: GraduationPlan[]): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code), { graduation: plans }, { merge: true });
+}
+
+/** 本機與雲端的畢業計畫聯集:同一成員以更新時間新的為準 */
+export async function mergeGraduationPlans(code: string, local: GraduationPlan[]): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  const snap = await getDoc(doc(d, 'spaces', code));
+  const cloud = (snap.data()?.graduation as GraduationPlan[] | undefined) ?? [];
+  const merged = new Map<string, GraduationPlan>();
+  for (const g of cloud) merged.set(g.ownerId, g);
+  for (const g of local) {
+    const cur = merged.get(g.ownerId);
+    if (!cur || (g.updatedAt ?? 0) >= (cur.updatedAt ?? 0)) merged.set(g.ownerId, g);
+  }
+  await setDoc(doc(d, 'spaces', code), { graduation: [...merged.values()] }, { merge: true });
 }
 
 /** 記帳分類整份覆蓋(數量固定在數十筆,逐筆同步不划算) */
@@ -231,6 +258,7 @@ export interface SpaceCallbacks {
   onExpenses?: (expenses: Expense[]) => void;
   onExpenseCategories?: (categories: ExpenseCategory[]) => void;
   onRecurringExpenses?: (recurring: RecurringExpense[]) => void;
+  onGraduation?: (plans: GraduationPlan[]) => void;
 }
 
 /** 訂閱共享空間,回傳取消訂閱函式 */
@@ -248,6 +276,7 @@ export function subscribeSpace(code: string, cb: SpaceCallbacks): () => void {
     if (data?.recurringExpenses) {
       cb.onRecurringExpenses?.(data.recurringExpenses as RecurringExpense[]);
     }
+    if (data?.graduation) cb.onGraduation?.(data.graduation as GraduationPlan[]);
   });
 
   let firstEvents = true;

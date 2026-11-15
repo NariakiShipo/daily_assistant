@@ -15,6 +15,7 @@ export const defaultData: AppData = {
   expenses: [],
   expenseCategories: DEFAULT_EXPENSE_CATEGORIES,
   recurringExpenses: [],
+  graduation: [],
   settings: {
     notificationsEnabled: false,
     googleConnected: false,

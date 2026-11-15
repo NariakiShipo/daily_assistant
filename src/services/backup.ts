@@ -13,6 +13,7 @@ import {
   CourseEntry,
   Expense,
   ExpenseCategory,
+  GraduationPlan,
   PeriodRecord,
   RecurringExpense,
   SemesterMeta,
@@ -136,6 +137,47 @@ function validRecurring(raw: unknown): RecurringExpense[] {
 }
 
 /**
+ * 畢業計畫:只檢查識別欄位,其餘集合缺少時補成空值。
+ * 課程標準是整包下載的資料,壞掉時整個丟掉(可以重新下載),不影響其他調整。
+ */
+function validGraduation(raw: unknown): GraduationPlan[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((g): g is Record<string, unknown> => isObj(g) && str(g.ownerId))
+    .map((g) => {
+      const standard = g.standard;
+      const validStandard =
+        isObj(standard) &&
+        typeof standard.entryYear === 'number' &&
+        str(standard.system) &&
+        str(standard.department) &&
+        isObj(standard.credits) &&
+        Array.isArray(standard.courses) &&
+        Array.isArray(standard.rules);
+      const strList = (v: unknown): string[] =>
+        Array.isArray(v) ? v.filter((x): x is string => str(x)) : [];
+      return {
+        ownerId: g.ownerId as string,
+        standard: validStandard ? (standard as unknown as GraduationPlan['standard']) : undefined,
+        ownClassPrefixes: strList(g.ownClassPrefixes),
+        excludedKeys: strList(g.excludedKeys),
+        overrides: isObj(g.overrides) ? (g.overrides as GraduationPlan['overrides']) : {},
+        overrideDimensions: isObj(g.overrideDimensions)
+          ? (g.overrideDimensions as Record<string, string>)
+          : {},
+        manualCredits: Array.isArray(g.manualCredits)
+          ? g.manualCredits.filter(
+              (m): m is GraduationPlan['manualCredits'][number] =>
+                isObj(m) && str(m.id) && str(m.title) && typeof m.credit === 'number' && str(m.category)
+            )
+          : [],
+        checkedRules: strList(g.checkedRules),
+        updatedAt: typeof g.updatedAt === 'number' ? g.updatedAt : 0,
+      };
+    });
+}
+
+/**
  * 成員是唯一不能為空的區塊:零成員會讓行程沒有擁有者、經期沒有記錄者,
  * 整個畫面都失去依據,所以任何情況下都至少退回預設成員。
  */
@@ -191,6 +233,7 @@ export function parseBackup(json: string): ParseResult {
     expenses: validExpenses(d.expenses),
     expenseCategories: validCategories(d.expenseCategories),
     recurringExpenses: validRecurring(d.recurringExpenses),
+    graduation: validGraduation(d.graduation),
     settings: {
       ...defaultData.settings,
       ...(isObj(d.settings) ? d.settings : {}),

@@ -15,6 +15,7 @@ import {
   ExpenseBudget,
   ExpenseCategory,
   ExpenseKeypad,
+  GraduationPlan,
   HomeCardPref,
   ModuleKey,
   PeriodRecord,
@@ -67,10 +68,15 @@ interface AppContextValue {
   deleteCourse: (id: string) => Promise<void>;
   /** 課表匯入:一次移除指定課程並寫入新課程(覆蓋邏輯由呼叫端決定) */
   importCourses: (removeIds: string[], entries: CourseEntry[]) => void;
+  /** 批次更新既有課程(補齊課程類別等,依 id 覆蓋) */
+  updateCourses: (entries: CourseEntry[]) => void;
   // semesters
   upsertSemester: (meta: SemesterMeta) => void;
   /** 記住某位成員的北科學號(下次從入口網站同步時自動帶入) */
   setNtutStudentId: (ownerId: string, studentId: string) => void;
+  // graduation
+  /** 儲存成員的畢業門檻計畫(依 ownerId 覆蓋,自動蓋上更新時間) */
+  saveGraduationPlan: (plan: GraduationPlan) => void;
   // tags
   addCustomTag: (name: string) => void;
   removeCustomTag: (name: string) => void;
@@ -199,6 +205,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       onExpenses: (expenses) => setData((d) => ({ ...d, expenses })),
       onExpenseCategories: (expenseCategories) => setData((d) => ({ ...d, expenseCategories })),
       onRecurringExpenses: (recurringExpenses) => setData((d) => ({ ...d, recurringExpenses })),
+      onGraduation: (graduation) => setData((d) => ({ ...d, graduation })),
     });
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -235,7 +242,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
          * 「刪掉的東西自己跑回來」。已經在同步的裝置應該以雲端為準。
          */
         if (cur.settings.spaceId !== sid) {
-          await fb.uploadLocal(sid, cur.events, cur.periods, cur.courses, cur.semesters);
+          await fb.uploadLocal(
+            sid,
+            cur.events,
+            cur.periods,
+            cur.courses,
+            cur.semesters,
+            // 帳目維持記帳分支原本的行為(登入時不上傳);畢業計畫是第 7 個參數
+            undefined,
+            cur.graduation
+          );
         }
         if (!cancelled) {
           setData((d) =>
@@ -499,6 +515,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         courses: [...d.courses.filter((c) => !rm.has(c.id)), ...entries],
       }));
       if (shared && spaceId) void fb.replaceCourseDocs(spaceId, removeIds, entries);
+    },
+    [shared, spaceId]
+  );
+
+  const updateCourses = useCallback(
+    (entries: CourseEntry[]) => {
+      if (!entries.length) return;
+      const byId = new Map(entries.map((e) => [e.id, e]));
+      setData((d) => ({
+        ...d,
+        courses: d.courses.map((c) => byId.get(c.id) ?? c),
+      }));
+      if (shared && spaceId) void fb.replaceCourseDocs(spaceId, [], entries);
+    },
+    [shared, spaceId]
+  );
+
+  const saveGraduationPlan = useCallback(
+    (plan: GraduationPlan) => {
+      const stamped: GraduationPlan = { ...plan, updatedAt: Date.now() };
+      setData((d) => {
+        const graduation = [
+          ...d.graduation.filter((g) => g.ownerId !== stamped.ownerId),
+          stamped,
+        ];
+        if (shared && spaceId) void fb.saveGraduationPlans(spaceId, graduation);
+        return { ...d, graduation };
+      });
     },
     [shared, spaceId]
   );
@@ -895,6 +939,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       data.recurringExpenses
     );
     if (data.semesters.length) void fb.saveSemesters(code, data.semesters);
+    if (data.graduation.length) void fb.saveGraduationPlans(code, data.graduation);
     if (authUser) void fb.bindUserSpace(authUser.uid, code);
     setData((d) => ({ ...d, settings: { ...d.settings, spaceId: code } }));
     return code;
@@ -907,6 +952,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     data.expenses,
     data.expenseCategories,
     data.recurringExpenses,
+    data.graduation,
     authUser,
   ]);
 
@@ -922,13 +968,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         data.periods,
         data.courses,
         data.semesters,
-        data.expenses
+        data.expenses,
+        data.graduation
       );
       if (authUser) void fb.bindUserSpace(authUser.uid, normalized);
       setData((d) => ({ ...d, settings: { ...d.settings, spaceId: normalized } }));
       return true;
     },
-    [data.events, data.periods, data.courses, data.semesters, data.expenses, authUser]
+    [data.events, data.periods, data.courses, data.semesters, data.expenses, data.graduation, authUser]
   );
 
   const leaveSharedSpace = useCallback(() => {
@@ -994,7 +1041,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           merged.periods,
           merged.courses,
           merged.semesters,
-          merged.expenses
+          merged.expenses,
+          merged.graduation
         );
         await fb.saveUsers(keepSpaceId, merged.users);
         await fb.saveExpenseCategories(keepSpaceId, merged.expenseCategories);
@@ -1028,8 +1076,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     updateCourse,
     deleteCourse,
     importCourses,
+    updateCourses,
     upsertSemester,
     setNtutStudentId,
+    saveGraduationPlan,
     addCustomTag,
     removeCustomTag,
     addPeriodFieldName,
