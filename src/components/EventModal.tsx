@@ -15,20 +15,24 @@ import {
   CalendarEvent,
   EVENT_TAGS,
   EventPriority,
+  PRIORITY_LABELS,
   PRIORITY_OPTIONS,
   RECURRENCE_LABELS,
   RECURRENCE_OPTIONS,
   REMIND_OPTIONS,
   RecurrenceFreq,
+  remindLabel,
 } from '../types';
 import { colors, priorityColors, radius, spacing, tagColor } from '../theme';
 import {
   formatDateZh,
+  fromDateKey,
   isValidTime,
   isWithin,
   minutesToTime,
   timeToMinutes,
   uid,
+  weekdayZh,
 } from '../utils/date';
 import { confirmDialog, notify } from '../utils/dialog';
 import { useApp } from '../store/AppContext';
@@ -38,6 +42,9 @@ import { detectConflict, stampFrom } from '../services/editConflict';
 import { Button, Chip } from './ui';
 import MiniCalendar from './MiniCalendar';
 import TimeField from './TimeField';
+
+/** 「更多選項」裡可以展開的那幾列 */
+type MoreSection = 'recurrence' | 'remind' | 'meta' | 'notes' | null;
 
 interface Props {
   visible: boolean;
@@ -68,6 +75,14 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
   const [until, setUntil] = useState(''); // 空字串 = 無限期重複
   const [remind, setRemind] = useState<number | null>(null); // null = 不提醒
   const [allDay, setAllDay] = useState(false);
+  /**
+   * 「更多選項」一次只展開一列。原本 12 個欄位全部攤開,主按鈕被推到很下面
+   * (檢視清單第 04 條);收起來之後每列仍然把目前的值寫在右邊,
+   * 設過的東西(例如提醒 30 分鐘前)不會因為收合而看不見。
+   */
+  const [openSection, setOpenSection] = useState<MoreSection>(null);
+  /** 月曆不再常駐,點日期膠囊才展開 */
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
 
   /**
    * 傳進來的可能是展開出的實例;編輯一律針對原始行程(整個系列),
@@ -121,6 +136,8 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
   useEffect(() => {
     if (!visible) return;
     setDateMode('start');
+    setOpenSection(null);
+    setDatePickerOpen(false);
     // 記下開啟當下的版本,之後才比對得出「編輯期間對方改了什麼」
     baselineUpdatedAt.current = series?.updatedAt;
     if (series) {
@@ -169,6 +186,10 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
     setEndTime(minutesToTime(timeToMinutes(t) + (duration > 0 ? duration : 60)));
   };
 
+  /** 展開「更多選項」的某一列;再點一次收起來(一次只開一列) */
+  const toggle = (section: Exclude<MoreSection, null>) =>
+    setOpenSection((cur) => (cur === section ? null : section));
+
   const toggleOwner = (id: string) =>
     setOwnerIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
 
@@ -184,6 +205,8 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
         return notify('開始日期不能晚於結束日期', `目前結束日為 ${formatDateZh(endDate)}。`);
       }
       setDate(key);
+      // 挑完開始日就收起月曆,回到一屏就看得完的表單
+      setDatePickerOpen(false);
     } else {
       if (key < date) {
         return notify('結束日期不能早於開始日期', `目前開始日為 ${formatDateZh(date)}。`);
@@ -357,55 +380,98 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
               placeholderTextColor={colors.textMuted}
             />
 
-            <Text style={s.label}>日期(點日曆選擇;長行程可設定結束日期)</Text>
+            <View style={s.rowBetween}>
+              <Text style={s.label}>日期</Text>
+              <View style={s.inlineSwitch}>
+                <Text style={s.inlineSwitchLabel}>整天</Text>
+                <Switch
+                  value={allDay}
+                  onValueChange={setAllDay}
+                  trackColor={{ true: colors.primary }}
+                />
+              </View>
+            </View>
             <View style={s.chips}>
               <Chip
-                label={`開始:${formatDateZh(date)}`}
-                active={dateMode === 'start'}
-                onPress={() => setDateMode('start')}
+                label={`${formatDateZh(date)}（週${weekdayZh[fromDateKey(date).getDay()]}）▾`}
+                active={datePickerOpen && dateMode === 'start'}
+                onPress={() => {
+                  setDateMode('start');
+                  setDatePickerOpen((v) => !(v && dateMode === 'start'));
+                }}
               />
-              <Chip
-                label={`結束:${endDate ? formatDateZh(endDate) : '單日'}`}
-                active={dateMode === 'end'}
-                onPress={() => setDateMode('end')}
-              />
-              {isMultiDay && (
-                <Chip label="改回單日" color={colors.textMuted} onPress={() => setEndDate('')} />
+              {isMultiDay ? (
+                <>
+                  <Chip
+                    label={`至 ${formatDateZh(endDate)} ▾`}
+                    color={colors.accent}
+                    active={datePickerOpen && dateMode === 'end'}
+                    onPress={() => {
+                      setDateMode('end');
+                      setDatePickerOpen(true);
+                    }}
+                  />
+                  <Chip
+                    label="改回單日"
+                    color={colors.textMuted}
+                    onPress={() => {
+                      setEndDate('');
+                      setDateMode('start');
+                    }}
+                  />
+                </>
+              ) : (
+                <Chip
+                  label="＋ 結束日"
+                  color={colors.textMuted}
+                  active={datePickerOpen && dateMode === 'end'}
+                  onPress={() => {
+                    setDateMode('end');
+                    setDatePickerOpen(true);
+                  }}
+                />
               )}
             </View>
-            <MiniCalendar
-              selected={
-                dateMode === 'start' ? date : dateMode === 'until' ? until || null : endDate || null
-              }
-              onSelect={pickDate}
-              getMark={(key) => {
-                if (key === date) return { bg: colors.primarySoft, border: colors.primary };
-                if (key === until) return { bg: colors.accentSoft, border: colors.accent };
-                if (endDate && isWithin(key, date, endDate)) return { bg: colors.primarySoft };
-                return undefined;
-              }}
-            />
 
-            <View style={s.switchRow}>
-              <Text style={s.label}>整天 / 無特定時間</Text>
-              <Switch
-                value={allDay}
-                onValueChange={setAllDay}
-                trackColor={{ true: colors.primary }}
-              />
-            </View>
+            {/* 月曆只在挑日期時出現,不再常駐佔掉半個表單 */}
+            {datePickerOpen && (
+              <View style={s.calendarWrap}>
+                {dateMode !== 'start' && (
+                  <Text style={s.hint}>
+                    {dateMode === 'end' ? '選一個結束日期(跨日行程)' : '選重複的結束日期'}
+                  </Text>
+                )}
+                <MiniCalendar
+                  selected={
+                    dateMode === 'start'
+                      ? date
+                      : dateMode === 'until'
+                        ? until || null
+                        : endDate || null
+                  }
+                  onSelect={pickDate}
+                  getMark={(key) => {
+                    if (key === date) return { bg: colors.primarySoft, border: colors.primary };
+                    if (key === until) return { bg: colors.accentSoft, border: colors.accent };
+                    if (endDate && isWithin(key, date, endDate)) return { bg: colors.primarySoft };
+                    return undefined;
+                  }}
+                />
+              </View>
+            )}
+
             {allDay ? (
               <Text style={s.hint}>
-                📌 這是「繳學費」「買生日禮物」這類沒有時段的事情,不會與課表衝突。
+                這是「繳學費」「買生日禮物」這類沒有時段的事情,不會與課表衝突。
               </Text>
             ) : (
               <View style={s.row}>
                 <View style={s.half}>
-                  <Text style={s.label}>開始時間</Text>
+                  <Text style={s.label}>開始</Text>
                   <TimeField value={startTime} onChange={changeStartTime} />
                 </View>
                 <View style={s.half}>
-                  <Text style={s.label}>結束時間</Text>
+                  <Text style={s.label}>結束</Text>
                   <TimeField value={endTime} onChange={setEndTime} />
                 </View>
               </View>
@@ -424,116 +490,155 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
               ))}
             </View>
 
-            <Text style={s.label}>重複(再點一下可取消)</Text>
-            <View style={s.chips}>
-              {RECURRENCE_OPTIONS.map((r) => (
-                <Chip
-                  key={r.value}
-                  label={r.label}
-                  color={colors.accent}
-                  active={freq === r.value}
-                  onPress={() => setFreq(freq === r.value ? null : r.value)}
-                />
-              ))}
-            </View>
-            {freq && (
-              <>
-                <Text style={s.hint}>
-                  🔁 從 {formatDateZh(date)} 起{RECURRENCE_LABELS[freq]}重複
-                  {until ? `,至 ${formatDateZh(until)} 止` : '(無限期)'}
-                  {freq === 'monthly' ? '。沒有該日期的月份會自動跳過。' : ''}
-                </Text>
+            <Text style={[s.label, { marginTop: spacing.lg }]}>更多選項</Text>
+            <View style={s.moreCard}>
+              <MoreRow
+                title="重複"
+                value={freq ? RECURRENCE_LABELS[freq] : '不重複'}
+                open={openSection === 'recurrence'}
+                onPress={() => toggle('recurrence')}
+              >
                 <View style={s.chips}>
-                  <Chip
-                    label={until ? `結束於 ${formatDateZh(until)}` : '設定結束日期'}
-                    active={dateMode === 'until'}
-                    onPress={() => setDateMode(dateMode === 'until' ? 'start' : 'until')}
-                  />
-                  {!!until && (
-                    <Chip label="改為無限期" color={colors.textMuted} onPress={() => setUntil('')} />
-                  )}
+                  {RECURRENCE_OPTIONS.map((r) => (
+                    <Chip
+                      key={r.value}
+                      label={r.label}
+                      color={colors.accent}
+                      active={freq === r.value}
+                      onPress={() => setFreq(freq === r.value ? null : r.value)}
+                    />
+                  ))}
                 </View>
-              </>
-            )}
+                {!!freq && (
+                  <>
+                    <Text style={s.hint}>
+                      從 {formatDateZh(date)} 起{RECURRENCE_LABELS[freq]}重複
+                      {until ? `,至 ${formatDateZh(until)} 止` : '(無限期)'}
+                      {freq === 'monthly' ? '。沒有該日期的月份會自動跳過。' : ''}
+                    </Text>
+                    <View style={s.chips}>
+                      <Chip
+                        label={until ? `結束於 ${formatDateZh(until)}` : '設定結束日期'}
+                        active={dateMode === 'until' && datePickerOpen}
+                        onPress={() => {
+                          setDateMode('until');
+                          setDatePickerOpen(true);
+                        }}
+                      />
+                      {!!until && (
+                        <Chip
+                          label="改為無限期"
+                          color={colors.textMuted}
+                          onPress={() => setUntil('')}
+                        />
+                      )}
+                    </View>
+                  </>
+                )}
+              </MoreRow>
 
-            <Text style={s.label}>提醒(再點一下可取消)</Text>
-            <View style={s.chips}>
-              {REMIND_OPTIONS.map((o) => (
-                <Chip
-                  key={o.value}
-                  label={o.label}
-                  color={colors.warning}
-                  active={remind === o.value}
-                  onPress={() => setRemind(remind === o.value ? null : o.value)}
+              <MoreRow
+                title="提醒"
+                value={remind !== null ? remindLabel(remind) : '不提醒'}
+                valueColor={remind !== null ? colors.warning : undefined}
+                open={openSection === 'remind'}
+                onPress={() => toggle('remind')}
+              >
+                <View style={s.chips}>
+                  {REMIND_OPTIONS.map((o) => (
+                    <Chip
+                      key={o.value}
+                      label={o.label}
+                      color={colors.warning}
+                      active={remind === o.value}
+                      onPress={() => setRemind(remind === o.value ? null : o.value)}
+                    />
+                  ))}
+                </View>
+                {remind !== null && !data.settings.notificationsEnabled && (
+                  <Text style={s.warn}>通知目前是關閉的,請到設定開啟才會收到提醒。</Text>
+                )}
+              </MoreRow>
+
+              <MoreRow
+                title="優先順序 · 標籤"
+                value={`${priority ? PRIORITY_LABELS[priority] : '一般'} · ${
+                  tags.length ? tags.join('、') : '—'
+                }`}
+                open={openSection === 'meta'}
+                onPress={() => toggle('meta')}
+              >
+                <View style={s.chips}>
+                  {PRIORITY_OPTIONS.map((pOpt) => (
+                    <Chip
+                      key={pOpt.value}
+                      label={pOpt.label}
+                      color={priorityColors[pOpt.value]}
+                      active={priority === pOpt.value}
+                      onPress={() => setPriority(priority === pOpt.value ? null : pOpt.value)}
+                    />
+                  ))}
+                </View>
+                <Text style={s.hint}>標籤可複選;長按自訂標籤可移除。</Text>
+                <View style={s.chips}>
+                  {allTags.map((t) => (
+                    <Chip
+                      key={t}
+                      label={t}
+                      color={tagColor(t)}
+                      active={tags.includes(t)}
+                      onPress={() => toggleTag(t)}
+                      onLongPress={customTags.includes(t) ? () => removeCustom(t) : undefined}
+                    />
+                  ))}
+                </View>
+                <View style={s.row}>
+                  <TextInput
+                    style={[s.input, { flex: 1 }]}
+                    value={newTag}
+                    onChangeText={setNewTag}
+                    placeholder="新增自訂標籤,例如:約會"
+                    placeholderTextColor={colors.textMuted}
+                    onSubmitEditing={addNewTag}
+                  />
+                  <TouchableOpacity style={s.addTagBtn} onPress={addNewTag}>
+                    <Text style={s.addTagBtnText}>＋ 新增</Text>
+                  </TouchableOpacity>
+                </View>
+              </MoreRow>
+
+              <MoreRow
+                title="備註"
+                value={notes.trim() ? '已填寫' : '—'}
+                open={openSection === 'notes'}
+                onPress={() => toggle('notes')}
+              >
+                <TextInput
+                  style={[s.input, { height: 64 }]}
+                  value={notes}
+                  onChangeText={setNotes}
+                  multiline
+                  placeholder="想記下的細節"
+                  placeholderTextColor={colors.textMuted}
                 />
-              ))}
-            </View>
-            {remind !== null && !data.settings.notificationsEnabled && (
-              <Text style={s.warn}>
-                ⚠️ 通知目前是關閉的,請到「設定」頁開啟才會收到提醒。
-              </Text>
-            )}
+              </MoreRow>
 
-            <Text style={s.label}>優先順序(再點一下可取消)</Text>
-            <View style={s.chips}>
-              {PRIORITY_OPTIONS.map((p) => (
-                <Chip
-                  key={p.value}
-                  label={p.label}
-                  color={priorityColors[p.value]}
-                  active={priority === p.value}
-                  onPress={() => setPriority(priority === p.value ? null : p.value)}
+              <View style={[s.moreRow, s.moreRowDivider]}>
+                <Text style={s.moreTitle}>同步到 Google 日曆</Text>
+                <Switch
+                  value={syncToGoogle}
+                  onValueChange={(v) => {
+                    if (v && !data.settings.googleConnected) {
+                      notify(
+                        '尚未連接',
+                        '請先到設定連接 Google Calendar。仍會標記此行程待同步。'
+                      );
+                    }
+                    setSyncToGoogle(v);
+                  }}
+                  trackColor={{ true: colors.primary }}
                 />
-              ))}
-            </View>
-
-            <Text style={s.label}>標籤(可複選;長按自訂標籤可移除)</Text>
-            <View style={s.chips}>
-              {allTags.map((t) => (
-                <Chip
-                  key={t}
-                  label={t}
-                  color={tagColor(t)}
-                  active={tags.includes(t)}
-                  onPress={() => toggleTag(t)}
-                  onLongPress={customTags.includes(t) ? () => removeCustom(t) : undefined}
-                />
-              ))}
-            </View>
-            <View style={s.row}>
-              <TextInput
-                style={[s.input, { flex: 1 }]}
-                value={newTag}
-                onChangeText={setNewTag}
-                placeholder="新增自訂標籤,例如:約會"
-                placeholderTextColor={colors.textMuted}
-                onSubmitEditing={addNewTag}
-              />
-              <TouchableOpacity style={s.addTagBtn} onPress={addNewTag}>
-                <Text style={s.addTagBtnText}>＋ 新增</Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={s.label}>備註</Text>
-            <TextInput
-              style={[s.input, { height: 64 }]}
-              value={notes}
-              onChangeText={setNotes}
-              multiline
-            />
-
-            <View style={s.switchRow}>
-              <Text style={s.label}>同步到 Google 日曆</Text>
-              <Switch
-                value={syncToGoogle}
-                onValueChange={(v) => {
-                  if (v && !data.settings.googleConnected) {
-                    notify('尚未連接', '請先到「設定」頁連接 Google Calendar。仍會標記此行程待同步。');
-                  }
-                  setSyncToGoogle(v);
-                }}
-                trackColor={{ true: colors.primary }}
-              />
+              </View>
             </View>
 
             <Button label={series ? '儲存變更' : '新增行程'} onPress={() => void save()} />
@@ -554,6 +659,32 @@ const EventModal: React.FC<Props> = ({ visible, onClose, event, defaultDate }) =
     </Modal>
   );
 };
+
+/**
+ * 「更多選項」的一列:收起來時右邊寫目前的值,點一下就地展開。
+ *
+ * 值寫在列上是這個設計的重點——收合如果把「提醒 30 分鐘前」也藏起來,
+ * 使用者就得逐列點開才知道自己設過什麼,那比全部攤開還糟。
+ */
+const MoreRow: React.FC<{
+  title: string;
+  value: string;
+  valueColor?: string;
+  open: boolean;
+  onPress: () => void;
+  children: React.ReactNode;
+}> = ({ title, value, valueColor, open, onPress, children }) => (
+  <View style={s.moreRowDivider}>
+    <TouchableOpacity style={s.moreRow} onPress={onPress}>
+      <Text style={s.moreTitle}>{title}</Text>
+      <Text style={[s.moreValue, !!valueColor && { color: valueColor, fontWeight: '600' }]} numberOfLines={1}>
+        {value}
+      </Text>
+      <Text style={s.moreChevron}>{open ? '⌄' : '›'}</Text>
+    </TouchableOpacity>
+    {open && <View style={s.moreBody}>{children}</View>}
+  </View>
+);
 
 const s = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
@@ -595,12 +726,28 @@ const s = StyleSheet.create({
   addTagBtnText: { color: colors.primary, fontSize: 14, fontWeight: '700' },
   half: { flex: 1 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.xs },
-  switchRow: {
+  rowBetween: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: spacing.sm,
   },
+  inlineSwitch: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  inlineSwitchLabel: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
+  calendarWrap: { marginTop: spacing.sm },
+  moreCard: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    paddingHorizontal: 14,
+    marginTop: 6,
+  },
+  moreRow: { flexDirection: 'row', alignItems: 'center', minHeight: 44, gap: spacing.sm },
+  moreRowDivider: { borderTopWidth: 1, borderTopColor: colors.border },
+  moreTitle: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
+  moreValue: { fontSize: 13, color: colors.textMuted, flexShrink: 1, maxWidth: '55%' },
+  moreChevron: { fontSize: 16, color: '#C9B8C0' },
+  moreBody: { paddingBottom: spacing.md },
 });
 
 export default EventModal;

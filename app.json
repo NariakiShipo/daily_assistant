@@ -50,7 +50,14 @@
           "color": "#E8638C"
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "選擇相簿裡的照片當作記帳分類圖示或收據。",
+          "cameraPermission": "拍照當作記帳分類圖示或收據。"
+        }
+      ]
     ]
   }
 }

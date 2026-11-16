@@ -11,7 +11,7 @@
  * - 雙方對同一 calendarId 讀寫
  */
 import { CalendarEvent } from '../types';
-import { getValidAccessToken } from './googleAuth';
+import { getAccessTokenResult, getValidAccessToken } from './googleAuth';
 import { GoogleEvent } from './googleSync';
 
 const API = 'https://www.googleapis.com/calendar/v3';
@@ -32,9 +32,15 @@ async function getToken(): Promise<string | null> {
   return manualToken ?? (await getValidAccessToken());
 }
 
-/** 是否有可用的 token(含 OAuth 自動刷新) */
-export async function isConnectedAsync(): Promise<boolean> {
-  return (await getToken()) !== null;
+/**
+ * 是否有可用的 token(含 OAuth 自動刷新)。
+ * null = 後端這次問不到,無法判定——呼叫端應維持現有狀態,不要當成斷線。
+ */
+export async function isConnectedAsync(): Promise<boolean | null> {
+  if (manualToken) return true;
+  const res = await getAccessTokenResult();
+  if (res.token) return true;
+  return res.uncertain ? null : false;
 }
 
 const headers = (token: string) => ({

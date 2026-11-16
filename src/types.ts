@@ -139,7 +139,7 @@ export interface CourseEntry {
   color?: string;
   /** 這是誰的課表 */
   ownerId: string;
-  /** 匯入來源:'ntut' = 北科課程好朋友;未設 = 手動建立 */
+  /** 匯入來源:'ntut' = 從北科匯入(入口網站或北科課程好朋友);未設 = 手動建立 */
   source?: 'ntut';
   /** 所屬學期(SemesterMeta.id,例如 '115-1');未設 = 未分類(舊資料) */
   semesterId?: string;
@@ -149,6 +149,15 @@ export interface CourseEntry {
   credit?: number;
   /** 授課教師 */
   teacher?: string;
+  /**
+   * 北科課程類別符號(○△☆●▲★,見 constants/ntut.ts)。
+   * 畢業門檻頁靠它判斷學分歸類;舊資料沒有這個欄位,可在畢業頁「補齊課程資料」。
+   */
+  ntutCourseType?: string;
+  /** 開課班級名稱(例如「資工三」「博雅課程(一)」),用來判斷本系課 / 博雅課 */
+  ntutClassNames?: string[];
+  /** 課程備註(例如「人文與藝術向度」「請選:通識中心 / 博雅課程」) */
+  ntutNotes?: string;
 }
 
 /** 學期:課表按學期分頁保存,起訖日用於行程衝突判斷 */
@@ -168,6 +177,82 @@ export const semesterOrder = (id: string): number => {
   const [y, s] = id.split('-').map(Number);
   return (y || 0) * 10 + (s || 0);
 };
+
+/**
+ * 畢業學分的類別。
+ *
+ * 對應北科課程標準的欄位:共同必修(○△)、通識博雅(△ 但另計向度與上限)、
+ * 共同選修(☆)、專業必修(●▲)、專業選修(★,本系)、跨域及自由選修(他系課與超修溢出)。
+ */
+export type CreditCategory =
+  | 'commonRequired'
+  | 'generalEd'
+  | 'commonElective'
+  | 'proRequired'
+  | 'proElective'
+  | 'free';
+
+/** 課程標準(北科課程系統 Cprog.jsp)裡的一列科目 */
+export interface StandardCourse {
+  /** 年級 1~4(無法解析時為 0) */
+  year: number;
+  /** 學期 1 或 2(無法解析時為 0) */
+  sem: number;
+  /** 類別符號 ○△☆●▲★ */
+  type: string;
+  name: string;
+  credit: number;
+  /** 分段修習進度,例如 '1/2';單一學期為 '1' */
+  stage: string;
+}
+
+/** 某入學年度、某系所的畢業課程標準(由北科課程好朋友的爬蟲資料取得) */
+export interface GraduationStandard {
+  /** 入學學年度(民國),例如 113 */
+  entryYear: number;
+  /** 學制,例如「四技」 */
+  system: string;
+  /** 系所,例如「資工系」 */
+  department: string;
+  /** 學分門檻(原始欄名 → 數值),例如 { 最低畢業學分數: 132, 校訂共同必修學分: 28 } */
+  credits: Record<string, number>;
+  courses: StandardCourse[];
+  /** 系所規定原文,逐條 */
+  rules: string[];
+  /** 下載時間(epoch ms) */
+  fetchedAt: number;
+}
+
+/** 手動加入的學分(抵免、轉學、暑修、他校課程⋯) */
+export interface ManualCredit {
+  id: string;
+  title: string;
+  credit: number;
+  category: CreditCategory;
+  /** 博雅向度(category 為 generalEd 時選填) */
+  dimension?: string;
+  /** 備註,例如「113-1 抵免」 */
+  note?: string;
+}
+
+/** 一位成員的畢業門檻計畫 */
+export interface GraduationPlan {
+  ownerId: string;
+  /** 套用的課程標準;未下載時沒有門檻,只統計已修學分 */
+  standard?: GraduationStandard;
+  /** 視為「本系」課程的開課班級前綴(例如 ['資工']);他系課程歸入跨域及自由選修 */
+  ownClassPrefixes: string[];
+  /** 不採計的課(不及格、停修、重修的舊紀錄),存 graduation.courseKey() */
+  excludedKeys: string[];
+  /** 人工改類別的課(courseKey → 類別) */
+  overrides: Record<string, CreditCategory>;
+  /** 改成博雅時指定的向度(courseKey → 向度) */
+  overrideDimensions?: Record<string, string>;
+  manualCredits: ManualCredit[];
+  /** 已確認的系所規定(存規定原文,重新下載標準時仍對得上) */
+  checkedRules: string[];
+  updatedAt: number;
+}
 
 export type FlowLevel = 'light' | 'medium' | 'heavy';
 
@@ -262,7 +347,57 @@ export interface AppSettings {
   googleSyncToken?: string | null;
   /** 上次從 Google 拉取的時間(epoch ms),顯示用 */
   googleLastPullAt?: number | null;
+  /** 當月花費上限(自己 / 伴侶各一個,雙人不設);只顯示已用與剩餘,不做任何提醒 */
+  budget?: ExpenseBudget;
+  /** 「雙人」支出怎麼算進個人統計 */
+  sharedSplit?: SharedSplit;
+  /** 記一筆時的金額鍵盤 */
+  expenseKeypad?: ExpenseKeypad;
+  /** 記過的備註,記一筆時當成常用備註小標籤(最近的排前面) */
+  recentExpenseNotes?: string[];
+  /**
+   * 使用者手動刪掉的固定支出月份,格式 '<recurringId>@YYYY-MM-DD'。
+   * 沒有這份清單的話,下次開 App 時自動補帳會把刪掉的那一筆又補回來。
+   */
+  recurringSkips?: string[];
+  /** 底部導覽列要放哪幾個模組(最多 4 個,順序 = 左到右;Home 固定在中間) */
+  navModules?: ModuleKey[];
+  /** Home 的卡片:順序與開關 */
+  homeCards?: HomeCardPref[];
+  /** Home 的「今日課程」看誰的課表(未設 = 主要使用者) */
+  homeCourseOwnerId?: string;
+  /**
+   * 每位成員的北科學號(成員 id → 學號),從入口網站同步課表時自動帶入。
+   * 只存在這台裝置;密碼一律不存。
+   */
+  ntutStudentIds?: Record<string, string>;
+  /** 是否走完「登入 → 選常用功能」;false 時進 App 會先到登入頁 */
+  onboarded?: boolean;
+  /** 是否看過首次使用教學;可從側邊選單「重看使用教學」重設 */
+  tutorialSeen?: boolean;
 }
+
+/* ───────────────────── 導覽與 Home ───────────────────── */
+
+/** 可以放進底部導覽列的功能模組 */
+export type ModuleKey = 'calendar' | 'expense' | 'period' | 'timetable' | 'graduation';
+
+/** 底部導覽列最多放幾個模組(左右各 2,中間留給 Home) */
+export const MAX_NAV_MODULES = 4;
+
+/** Home 上一張卡片的偏好 */
+export interface HomeCardPref {
+  key: HomeCardKey;
+  on: boolean;
+}
+
+export type HomeCardKey =
+  | 'course'
+  | 'period'
+  | 'events'
+  | 'expense'
+  | 'tomorrow'
+  | 'monthExpense';
 
 export interface AppData {
   users: UserProfile[];
@@ -271,5 +406,158 @@ export interface AppData {
   courses: CourseEntry[];
   /** 已知的學期(匯入課表時建立) */
   semesters: SemesterMeta[];
+  /** 帳目 */
+  expenses: Expense[];
+  /** 記帳分類(預設 + 自訂) */
+  expenseCategories: ExpenseCategory[];
+  /** 固定支出的範本 */
+  recurringExpenses: RecurringExpense[];
+  /** 畢業門檻計畫(每位成員一份;未設定者沒有項目) */
+  graduation: GraduationPlan[];
   settings: AppSettings;
 }
+
+/* ───────────────────────── 記帳 ───────────────────────── */
+
+/** 一筆帳是支出還是收入 */
+export type ExpenseKind = 'expense' | 'income';
+
+/** 這筆帳算誰的:自己 / 伴侶 / 雙人共同 */
+export type ExpenseWho = 'self' | 'partner' | 'both';
+
+/** 付款方式 */
+export type PaymentMethod = 'cash' | 'card' | 'transfer';
+
+export const PAYMENT_LABELS: Record<PaymentMethod, string> = {
+  cash: '現金',
+  card: '卡',
+  transfer: '轉帳',
+};
+
+export const PAYMENT_OPTIONS = (['cash', 'card', 'transfer'] as PaymentMethod[]).map((value) => ({
+  value,
+  label: PAYMENT_LABELS[value],
+}));
+
+/**
+ * 「雙人」支出怎麼算進個人統計。
+ *
+ * separate = 獨立一類:只出現在「雙人」,不計入任何人的上限。
+ * half     = 各算一半:一半分別加進自己與伴侶的統計與上限。
+ */
+export type SharedSplit = 'separate' | 'half';
+
+/** 金額輸入用哪種鍵盤 */
+export type ExpenseKeypad = 'app' | 'system';
+
+/** 一筆帳目 */
+export interface Expense {
+  id: string;
+  /** 正數;支出或收入由 kind 決定,不用負數表示支出 */
+  amount: number;
+  kind: ExpenseKind;
+  who: ExpenseWho;
+  /** ExpenseCategory.id */
+  categoryId: string;
+  /** YYYY-MM-DD */
+  date: string;
+  note?: string;
+  payment: PaymentMethod;
+  /** 收據照片(本機 file:// 或 data:) */
+  receiptUri?: string;
+  /** 由固定支出自動產生時,來源 RecurringExpense.id */
+  recurringId?: string;
+  createdBy: string;
+  updatedAt?: number;
+  updatedBy?: string;
+  /** 最後由哪台裝置修改;與行程同樣用來略過自己的推播 */
+  updatedByDevice?: string;
+}
+
+/**
+ * 記帳分類(= 使用者說的「標籤」)。
+ *
+ * 預設分類只能隱藏不能刪除,否則舊帳目會失去分類;
+ * 自訂分類可改名、換圖、刪除(刪除時要先把舊帳目移到別的分類)。
+ */
+export interface ExpenseCategory {
+  id: string;
+  name: string;
+  kind: ExpenseKind;
+  /** 內建線條圖示的鍵(見 components/Icon) */
+  icon?: string;
+  /** 使用者選的 Emoji(與 icon、imageUri 三選一) */
+  emoji?: string;
+  /** 使用者上傳並裁成圓形的圖片 */
+  imageUri?: string;
+  /** 圓餅圖與排行用的顏色 */
+  color: string;
+  /** 預設分類:不可刪除,只能隱藏 */
+  builtin: boolean;
+  /** 隱藏後不再出現在記一筆的分類格,但舊帳目仍看得到分類 */
+  hidden?: boolean;
+  /** 顯示順序(長按拖曳調整) */
+  order: number;
+}
+
+/** 固定支出:到期當天自動新增一筆真實帳目,之後可單獨修改或刪除 */
+export interface RecurringExpense {
+  id: string;
+  name: string;
+  amount: number;
+  kind: ExpenseKind;
+  who: ExpenseWho;
+  categoryId: string;
+  payment: PaymentMethod;
+  /** 每月幾號記一筆(1–31;超過當月天數時落在月底) */
+  dayOfMonth: number;
+  /** 從哪個月開始自動記(YYYY-MM);未設 = 建立當月 */
+  startMonth?: string;
+}
+
+/** 當月花費上限:自己與伴侶各一個,雙人不設 */
+export interface ExpenseBudget {
+  self?: number;
+  partner?: number;
+}
+
+/** 記帳的預設分類顏色(沿用 theme 的 tagPalette 八色與成員色) */
+export const EXPENSE_CATEGORY_COLORS = [
+  '#E8638C', '#4A90D9', '#B85FA8', '#E5A33D', '#7C6BD6',
+  '#D9534F', '#5C7FD9', '#2BAFA0', '#46A35E', '#D97B4A',
+  '#8A8F4A', '#3FA37A',
+];
+
+/**
+ * 預設分類。
+ *
+ * 支出 10 個是使用者指定的清單;收入 4 個是最小可用集合,
+ * 兩邊都 builtin(可隱藏、不可刪),自訂分類從 order 100 起跳。
+ */
+export const DEFAULT_EXPENSE_CATEGORIES: ExpenseCategory[] = [
+  { id: 'c-food', name: '飲食', kind: 'expense', icon: 'food', color: '#E8638C', builtin: true, order: 0 },
+  { id: 'c-transit', name: '交通', kind: 'expense', icon: 'transit', color: '#4A90D9', builtin: true, order: 1 },
+  { id: 'c-shopping', name: '購物', kind: 'expense', icon: 'shopping', color: '#B85FA8', builtin: true, order: 2 },
+  { id: 'c-fun', name: '娛樂', kind: 'expense', icon: 'fun', color: '#E5A33D', builtin: true, order: 3 },
+  { id: 'c-home', name: '居住', kind: 'expense', icon: 'home', color: '#7C6BD6', builtin: true, order: 4 },
+  { id: 'c-health', name: '醫療', kind: 'expense', icon: 'health', color: '#D9534F', builtin: true, order: 5 },
+  { id: 'c-edu', name: '教育', kind: 'expense', icon: 'edu', color: '#5C7FD9', builtin: true, order: 6 },
+  { id: 'c-daily', name: '日用品', kind: 'expense', icon: 'daily', color: '#2BAFA0', builtin: true, order: 7 },
+  { id: 'c-phone', name: '通訊', kind: 'expense', icon: 'phone', color: '#46A35E', builtin: true, order: 8 },
+  { id: 'c-pet', name: '寵物', kind: 'expense', icon: 'pet', color: '#D97B4A', builtin: true, order: 9 },
+  { id: 'c-salary', name: '薪資', kind: 'income', icon: 'salary', color: '#3FA37A', builtin: true, order: 0 },
+  { id: 'c-bonus', name: '獎金', kind: 'income', icon: 'bonus', color: '#E5A33D', builtin: true, order: 1 },
+  { id: 'c-invest', name: '投資', kind: 'income', icon: 'invest', color: '#4A90D9', builtin: true, order: 2 },
+  { id: 'c-other-income', name: '其他', kind: 'income', icon: 'more', color: '#8A8F4A', builtin: true, order: 3 },
+];
+
+/** 找不到分類時的替身:舊帳目的分類被刪掉也不會讓畫面崩掉 */
+export const UNKNOWN_CATEGORY: ExpenseCategory = {
+  id: '',
+  name: '未分類',
+  kind: 'expense',
+  icon: 'more',
+  color: '#C9B8C0',
+  builtin: true,
+  order: 999,
+};

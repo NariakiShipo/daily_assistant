@@ -14,14 +14,20 @@
  * 3. functions/.env 內含 GOOGLE_CLIENT_ID(Web OAuth 用戶端 ID,非機密)
  *
  * 執行環境 Node 22(Node 20 於 2026-10-30 停用)。
+ *
+ * 同一包還有:跨裝置推播(onEventWritten)與北科課表同步(fetchNtutTimetable,
+ * 細節在 ntut.js;不需要額外的 secret)。
  */
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const logger = require('firebase-functions/logger');
 const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const { getMessaging } = require('firebase-admin/messaging');
 const { buildEventPush, targetTokens } = require('./pushMessage');
+const { NtutError, fetchNtutTimetable } = require('./ntut');
+const { nextRateWindow } = require('./rateLimit');
 
 initializeApp();
 const db = getFirestore();
@@ -51,9 +57,9 @@ async function tokenRequest(params) {
   return json;
 }
 
-function requireUid(request) {
+function requireUid(request, message = '請先登入帳號再連接日曆。') {
   const uid = request.auth?.uid;
-  if (!uid) throw new HttpsError('unauthenticated', '請先登入帳號再連接日曆。');
+  if (!uid) throw new HttpsError('unauthenticated', message);
   return uid;
 }
 
@@ -84,11 +90,22 @@ exports.exchangeGoogleCode = onCall(
           : {}),
       });
     } catch (e) {
+      // 初次連接最容易壞(redirect_uri 不符、授權碼過期、client secret 設錯),
+      // 而 HttpsError 不會被框架寫進 log —— 少了這行,Cloud Logging 一片空白。
+      // redirectUri 是公開網址可以印;code / codeVerifier 是憑證,絕不能印。
+      logger.error('exchangeGoogleCode: 交換失敗', e, {
+        uid,
+        oauthError: e.oauthError ?? '',
+        oauthErrorDescription: e.message,
+        redirectUri,
+        hasCodeVerifier: typeof codeVerifier === 'string' && !!codeVerifier,
+      });
       throw new HttpsError('failed-precondition', `Google 授權碼交換失敗:${e.message}`);
     }
 
     const docRef = db.collection(TOKENS_COLLECTION).doc(uid);
     if (json.refresh_token) {
+      // 不用 merge:整份覆寫,順便清掉上次失效時留下的 revokedAt
       await docRef.set({
         refreshToken: json.refresh_token,
         scope: json.scope ?? '',
@@ -96,8 +113,16 @@ exports.exchangeGoogleCode = onCall(
         updatedAt: FieldValue.serverTimestamp(),
       });
     }
-    // 沒拿到新 refresh token 時,若先前已有存檔仍算永久連接
-    const permanent = !!json.refresh_token || (await docRef.get()).exists;
+    // 沒拿到新 refresh token 時,若先前已有「還有效的」存檔仍算永久連接。
+    // 注意要看 refreshToken 欄位而不是文件存在:失效時我們保留文件(只把欄位清成 null)
+    // 留稽核線索,只看 exists 會把已撤銷的綁定誤報成永久連接。
+    const permanent = !!json.refresh_token || !!(await docRef.get()).data()?.refreshToken;
+    logger.info('exchangeGoogleCode', {
+      uid,
+      permanent,
+      gotRefreshToken: !!json.refresh_token,
+      scope: json.scope ?? '',
+    });
 
     return {
       accessToken: json.access_token,
@@ -109,7 +134,14 @@ exports.exchangeGoogleCode = onCall(
 
 /**
  * 取得新的 access token:前端本機 token 過期時呼叫。
- * 用保管的 refresh token 向 Google 換新;refresh token 失效(使用者撤銷)則清除存檔。
+ * 用保管的 refresh token 向 Google 換新;refresh token 失效則標記為已撤銷。
+ *
+ * 回傳的 reason 讓前端能分辨「從沒連過」與「連過但授權死了」——前者該引導去連接,
+ * 後者該引導重新授權。少了它兩種情況的畫面一模一樣,使用者只會覺得「又斷了」。
+ *
+ * 三條出口都留 log:沒有它就無法分辨這支「根本沒被呼叫」(前端時序問題)、
+ * 「回報未連接」(綁定真的沒了)與「丟 unavailable」(後端或 Google 暫時失敗),
+ * 而這三種情況的修法完全不同。
  */
 exports.getCalendarToken = onCall(
   { region: REGION, secrets: [GOOGLE_CLIENT_SECRET] },
@@ -118,7 +150,12 @@ exports.getCalendarToken = onCall(
     const docRef = db.collection(TOKENS_COLLECTION).doc(uid);
     const snap = await docRef.get();
     const refreshToken = snap.exists ? snap.data().refreshToken : null;
-    if (!refreshToken) return { connected: false };
+    if (!refreshToken) {
+      // 文件在但沒 token = 之前被標記撤銷過;文件不在 = 這個帳號從沒連過
+      const reason = snap.exists ? 'revoked' : 'never';
+      logger.info('getCalendarToken: 未連接', { uid, reason });
+      return { connected: false, reason };
+    }
 
     try {
       const json = await tokenRequest({
@@ -127,17 +164,40 @@ exports.getCalendarToken = onCall(
         client_id: GOOGLE_CLIENT_ID.value(),
         client_secret: GOOGLE_CLIENT_SECRET.value(),
       });
+      logger.info('getCalendarToken: 續期成功', { uid, expiresIn: json.expires_in ?? 3600 });
       return {
         connected: true,
         accessToken: json.access_token,
         expiresIn: json.expires_in ?? 3600,
       };
     } catch (e) {
-      // invalid_grant = refresh token 已被撤銷或過期 → 視為未連接
       if (e.oauthError === 'invalid_grant') {
-        await docRef.delete();
-        return { connected: false };
+        // refresh token 已失效。**不刪文件**,只把 token 清成 null 並記下時間:
+        // invalid_grant 不等於使用者撤銷 —— OAuth 同意畫面停在 Testing 時,
+        // refresh token 每 7 天就會自己過期。整份刪掉會把唯一的線索一起刪掉,
+        // 「為什麼又斷了」就永遠查不出來。重新授權時 exchangeGoogleCode 會整份覆寫。
+        await docRef.set(
+          { refreshToken: null, revokedAt: FieldValue.serverTimestamp() },
+          { merge: true }
+        );
+        // 欄位不可叫 message:firebase-functions 的 entryFromArgs 會用日誌文字
+        // 蓋掉結構化物件的 message 鍵(out = {...entry, severity}; out.message = message),
+        // Google 回的錯誤描述會整個消失。
+        logger.warn('getCalendarToken: refresh token 失效', {
+          uid,
+          oauthError: e.oauthError,
+          oauthErrorDescription: e.message,
+          hint: '若 OAuth 同意畫面仍是 Testing,refresh token 每 7 天必過期',
+        });
+        return { connected: false, reason: 'revoked' };
       }
+      // 把 Error 實例一起傳進去:ERROR severity 的參數裡沒有 Error 時,
+      // firebase-functions 會把 message 換成指向這行 logger 呼叫的合成堆疊。
+      logger.error('getCalendarToken: 續期失敗', e, {
+        uid,
+        oauthError: e.oauthError ?? '',
+        oauthErrorDescription: e.message,
+      });
       throw new HttpsError('unavailable', `更新 Google token 失敗:${e.message}`);
     }
   }
@@ -200,6 +260,107 @@ exports.onEventWritten = onDocumentWritten(
   }
 );
 
+/** 每個帳號 10 分鐘內最多呼叫幾次「從北科入口網站讀課表」 */
+const NTUT_RATE_LIMIT = { windowMs: 10 * 60 * 1000, max: 10 };
+/** 次數紀錄;和 googleTokens 一樣被 firestore.rules 的 catch-all 擋住前端存取 */
+const NTUT_LIMITS_COLLECTION = 'ntutRateLimits';
+
+/** NtutError.code → HttpsError 代碼(前端另外從 details.reason 拿到原始代碼) */
+const NTUT_HTTPS_CODES = {
+  'wrong-credentials': 'permission-denied',
+  locked: 'permission-denied',
+  rejected: 'permission-denied',
+  'password-expired': 'failed-precondition',
+  'mobile-verification': 'failed-precondition',
+  // 不用 not-found:前端拿 functions/not-found 判斷「函式還沒部署」
+  'no-semesters': 'failed-precondition',
+  'semester-not-found': 'failed-precondition',
+  network: 'unavailable',
+  http: 'unavailable',
+  'sso-failed': 'unavailable',
+  'session-expired': 'unavailable',
+  unexpected: 'internal',
+};
+
+/** 用掉一次額度;超過上限回 false */
+async function consumeNtutQuota(uid) {
+  const ref = db.collection(NTUT_LIMITS_COLLECTION).doc(uid);
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const r = nextRateWindow(snap.exists ? snap.data() : null, Date.now(), NTUT_RATE_LIMIT);
+    if (r.allowed) tx.set(ref, r.state);
+    return r;
+  });
+}
+
+/**
+ * 從北科入口網站讀課表:代為登入 → SSO 到課程系統 → 抓選課表並解析(邏輯在 ntut.js)。
+ *
+ * 為什麼要經過後端:學校的伺服器沒有 CORS,網頁版 / PWA 無法直接讀。
+ *
+ * 密碼的處理:只在這次呼叫中轉送給 app.ntut.edu.tw 登入,不存 Firestore、不寫 log
+ * (也不 log 學號,uid 就足以追查)。要求登入帳號 + 次數上限,避免被當成替別人亂試密碼的跳板。
+ */
+exports.fetchNtutTimetable = onCall(
+  { region: REGION, timeoutSeconds: 60, maxInstances: 3 },
+  async (request) => {
+    const uid = requireUid(request, '請先登入 Daily Bear 帳號,才能從北科入口網站同步課表。');
+
+    const { studentId, password, year, sem } = request.data ?? {};
+    const id = typeof studentId === 'string' ? studentId.trim() : '';
+    if (!/^[A-Za-z0-9]{4,20}$/.test(id)) {
+      throw new HttpsError('invalid-argument', '學號格式不對,請輸入入口網站的帳號(學號)。');
+    }
+    if (typeof password !== 'string' || !password || password.length > 128) {
+      throw new HttpsError('invalid-argument', '請輸入入口網站密碼。');
+    }
+    const hasTerm = year !== undefined && year !== null;
+    if (hasTerm !== (sem !== undefined && sem !== null)) {
+      throw new HttpsError('invalid-argument', '學年度與學期要一起指定。');
+    }
+    if (hasTerm && !(Number.isInteger(year) && year > 0 && year < 1000 && Number.isInteger(sem) && sem >= 0 && sem <= 9)) {
+      throw new HttpsError('invalid-argument', '學年度或學期格式不對。');
+    }
+
+    const quota = await consumeNtutQuota(uid);
+    if (!quota.allowed) {
+      const minutes = Math.max(1, Math.ceil(quota.retryAfterMs / 60000));
+      logger.warn('fetchNtutTimetable: 超過次數上限', { uid });
+      throw new HttpsError('resource-exhausted', `嘗試太多次了,請 ${minutes} 分鐘後再試。`, {
+        reason: 'rate-limited',
+      });
+    }
+
+    try {
+      const result = await fetchNtutTimetable({
+        studentId: id,
+        password,
+        year: hasTerm ? year : undefined,
+        sem: hasTerm ? sem : undefined,
+      });
+      logger.info('fetchNtutTimetable: 完成', {
+        uid,
+        semester: `${result.semester.year}-${result.semester.sem}`,
+        courses: result.courses.length,
+        withdrawn: result.withdrawn.length,
+      });
+      return result;
+    } catch (e) {
+      if (e instanceof NtutError) {
+        // 帳密錯誤這類是使用者端的問題,記 info 就好;學校端或解析失敗才是要追的
+        const userSide = ['wrong-credentials', 'locked', 'rejected', 'password-expired', 'mobile-verification'];
+        const log = userSide.includes(e.code) ? logger.info : logger.warn;
+        log('fetchNtutTimetable: 失敗', { uid, reason: e.code, status: e.status ?? null, host: e.host ?? null });
+        throw new HttpsError(NTUT_HTTPS_CODES[e.code] ?? 'internal', e.message, { reason: e.code });
+      }
+      logger.error('fetchNtutTimetable: 未預期的錯誤', e, { uid });
+      throw new HttpsError('internal', '讀取北科課表時發生未預期的錯誤,請稍後再試。', {
+        reason: 'unexpected',
+      });
+    }
+  }
+);
+
 /** 解除綁定:撤銷 refresh token 並刪除存檔(僅「中斷連接」時呼叫,登出不呼叫) */
 exports.disconnectCalendar = onCall({ region: REGION }, async (request) => {
   const uid = requireUid(request);
@@ -207,6 +368,7 @@ exports.disconnectCalendar = onCall({ region: REGION }, async (request) => {
   const snap = await docRef.get();
   const refreshToken = snap.exists ? snap.data().refreshToken : null;
   await docRef.delete();
+  logger.info('disconnectCalendar: 已解除綁定', { uid, hadRefreshToken: !!refreshToken });
   if (refreshToken) {
     // 撤銷失敗不影響解除結果(token 之後自然過期)
     await fetch(REVOKE_ENDPOINT, {

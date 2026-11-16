@@ -8,9 +8,15 @@
  *   搭配 firestore.rules 禁止列舉所有空間
  *
  * 結構:
- *   spaces/{code}            { users, createdAt }
+ *   spaces/{code}            { users, semesters, expenseCategories, recurringExpenses,
+ *                              graduation, createdAt }
  *   spaces/{code}/events/{id}
  *   spaces/{code}/periods/{id}
+ *   spaces/{code}/courses/{id}
+ *   spaces/{code}/expenses/{id}
+ *
+ * 記帳分類、固定支出與畢業計畫是小量且整份一起改的設定,放在空間根文件上,
+ * 不另開子集合(跟 semesters 一樣)。
  */
 import { initializeApp, FirebaseApp } from 'firebase/app';
 import {
@@ -28,7 +34,17 @@ import {
   deleteField,
 } from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured } from '../config';
-import { CalendarEvent, CourseEntry, PeriodRecord, SemesterMeta, UserProfile } from '../types';
+import {
+  CalendarEvent,
+  CourseEntry,
+  Expense,
+  ExpenseCategory,
+  GraduationPlan,
+  PeriodRecord,
+  RecurringExpense,
+  SemesterMeta,
+  UserProfile,
+} from '../types';
 
 let app: FirebaseApp | null = null;
 let db: Firestore | null = null;
@@ -83,13 +99,21 @@ export async function createSpace(
   users: UserProfile[],
   events: CalendarEvent[],
   periods: PeriodRecord[],
-  courses: CourseEntry[]
+  courses: CourseEntry[],
+  expenses?: Expense[],
+  expenseCategories?: ExpenseCategory[],
+  recurringExpenses?: RecurringExpense[]
 ): Promise<string> {
   const d = getDb();
   if (!d) throw new Error('Firebase 尚未設定');
   const code = newSpaceCode();
-  await setDoc(doc(d, 'spaces', code), { users, createdAt: serverTimestamp() });
-  await uploadLocal(code, events, periods, courses);
+  await setDoc(doc(d, 'spaces', code), {
+    users,
+    createdAt: serverTimestamp(),
+    ...(expenseCategories ? { expenseCategories } : {}),
+    ...(recurringExpenses ? { recurringExpenses } : {}),
+  });
+  await uploadLocal(code, events, periods, courses, undefined, expenses);
   return code;
 }
 
@@ -107,7 +131,9 @@ export async function uploadLocal(
   events: CalendarEvent[],
   periods: PeriodRecord[],
   courses: CourseEntry[],
-  semesters?: SemesterMeta[]
+  semesters?: SemesterMeta[],
+  expenses?: Expense[],
+  graduation?: GraduationPlan[]
 ): Promise<void> {
   const d = getDb();
   if (!d) return;
@@ -115,8 +141,73 @@ export async function uploadLocal(
   for (const ev of events) batch.set(doc(d, 'spaces', code, 'events', ev.id), ev);
   for (const p of periods) batch.set(doc(d, 'spaces', code, 'periods', p.id), p);
   for (const c of courses) batch.set(doc(d, 'spaces', code, 'courses', c.id), c);
+  for (const e of expenses ?? []) batch.set(doc(d, 'spaces', code, 'expenses', e.id), e);
   await batch.commit();
   if (semesters?.length) await mergeSemesters(code, semesters);
+  if (graduation?.length) await mergeGraduationPlans(code, graduation);
+}
+
+/** 畢業計畫(每位成員一份)存在空間根文件上,整份覆蓋 */
+export async function saveGraduationPlans(code: string, plans: GraduationPlan[]): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code), { graduation: plans }, { merge: true });
+}
+
+/** 本機與雲端的畢業計畫聯集:同一成員以更新時間新的為準 */
+export async function mergeGraduationPlans(code: string, local: GraduationPlan[]): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  const snap = await getDoc(doc(d, 'spaces', code));
+  const cloud = (snap.data()?.graduation as GraduationPlan[] | undefined) ?? [];
+  const merged = new Map<string, GraduationPlan>();
+  for (const g of cloud) merged.set(g.ownerId, g);
+  for (const g of local) {
+    const cur = merged.get(g.ownerId);
+    if (!cur || (g.updatedAt ?? 0) >= (cur.updatedAt ?? 0)) merged.set(g.ownerId, g);
+  }
+  await setDoc(doc(d, 'spaces', code), { graduation: [...merged.values()] }, { merge: true });
+}
+
+/** 記帳分類整份覆蓋(數量固定在數十筆,逐筆同步不划算) */
+export async function saveExpenseCategories(
+  code: string,
+  categories: ExpenseCategory[]
+): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code), { expenseCategories: categories }, { merge: true });
+}
+
+/** 固定支出範本整份覆蓋 */
+export async function saveRecurringExpenses(
+  code: string,
+  recurring: RecurringExpense[]
+): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code), { recurringExpenses: recurring }, { merge: true });
+}
+
+export async function saveExpenseDoc(code: string, e: Expense): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await setDoc(doc(d, 'spaces', code, 'expenses', e.id), e);
+}
+
+export async function deleteExpenseDoc(code: string, id: string): Promise<void> {
+  const d = getDb();
+  if (!d) return;
+  await deleteDoc(doc(d, 'spaces', code, 'expenses', id));
+}
+
+/** 固定支出一次補好幾個月時,整批寫入省來回 */
+export async function saveExpenseDocs(code: string, list: Expense[]): Promise<void> {
+  const d = getDb();
+  if (!d || !list.length) return;
+  const batch = writeBatch(d);
+  for (const e of list) batch.set(doc(d, 'spaces', code, 'expenses', e.id), e);
+  await batch.commit();
 }
 
 /** 學期清單存在空間根文件上(小量資料,整份覆蓋) */
@@ -164,6 +255,10 @@ export interface SpaceCallbacks {
   onPeriods: (periods: PeriodRecord[]) => void;
   onCourses: (courses: CourseEntry[]) => void;
   onSemesters?: (semesters: SemesterMeta[]) => void;
+  onExpenses?: (expenses: Expense[]) => void;
+  onExpenseCategories?: (categories: ExpenseCategory[]) => void;
+  onRecurringExpenses?: (recurring: RecurringExpense[]) => void;
+  onGraduation?: (plans: GraduationPlan[]) => void;
 }
 
 /** 訂閱共享空間,回傳取消訂閱函式 */
@@ -175,6 +270,13 @@ export function subscribeSpace(code: string, cb: SpaceCallbacks): () => void {
     const data = snap.data();
     if (data?.users) cb.onUsers(data.users as UserProfile[]);
     if (data?.semesters) cb.onSemesters?.(data.semesters as SemesterMeta[]);
+    if (data?.expenseCategories) {
+      cb.onExpenseCategories?.(data.expenseCategories as ExpenseCategory[]);
+    }
+    if (data?.recurringExpenses) {
+      cb.onRecurringExpenses?.(data.recurringExpenses as RecurringExpense[]);
+    }
+    if (data?.graduation) cb.onGraduation?.(data.graduation as GraduationPlan[]);
   });
 
   let firstEvents = true;
@@ -199,11 +301,16 @@ export function subscribeSpace(code: string, cb: SpaceCallbacks): () => void {
     cb.onCourses(snap.docs.map((x) => x.data() as CourseEntry));
   });
 
+  const unsubExpenses = onSnapshot(collection(d, 'spaces', code, 'expenses'), (snap) => {
+    cb.onExpenses?.(snap.docs.map((x) => x.data() as Expense));
+  });
+
   return () => {
     unsubSpace();
     unsubEvents();
     unsubPeriods();
     unsubCourses();
+    unsubExpenses();
   };
 }
 

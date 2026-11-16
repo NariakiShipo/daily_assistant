@@ -13,6 +13,8 @@ import {
 import { useApp } from '../store/AppContext';
 import { colors, radius, spacing, userColorChoices } from '../theme';
 import { Button, Card, Chip, SectionTitle } from '../components/ui';
+import { ScreenHeader } from '../components/expenseUi';
+import { moduleMeta, normalizeNavModules, visibleHomeCards } from '../services/navigation';
 
 /** 上課提醒的可選提前時間 */
 const COURSE_REMIND_OPTIONS = [
@@ -32,7 +34,52 @@ import { confirmDialog, notify } from '../utils/dialog';
 import { backupFileName, buildBackup, parseBackup } from '../services/backup';
 import { pickBackup, saveBackup } from '../services/backupFile';
 
-const SettingsScreen: React.FC = () => {
+/**
+ * 設定(設計稿 1o):總覽 + 子頁,不再是一頁塞 6 張卡。
+ *
+ * 原本 670 行全攤在同一頁,要找「上課提醒幾分鐘」得捲過 Firebase 的設定說明
+ * (檢視清單第 01 條)。改成總覽清單,每列第二行直接寫**目前狀態**——
+ * 已登入誰、連接了沒、提醒幾分鐘——不用點進去就知道有沒有設好。
+ *
+ * 從側邊選單可以直接跳到某一段(帶 section prop),那時候就不顯示總覽。
+ */
+export type SettingsSection =
+  | 'members'
+  | 'account'
+  | 'sharing'
+  | 'google'
+  | 'notifications'
+  | 'data'
+  | 'developer';
+
+/** 總覽上那些「不在這個畫面裡」的入口,由外面接手開啟 */
+export type SettingsExternal = 'expenseSettings' | 'homeCards' | 'pickModules';
+
+interface Props {
+  /** 直接顯示這一段(側邊選單用);未指定 = 顯示總覽,點進去才看子頁 */
+  section?: SettingsSection;
+  /** 返回鍵;未指定時不顯示 */
+  onBack?: () => void;
+  title?: string;
+  /** 總覽上通往其他畫面的入口;沒給就不顯示那幾列 */
+  onOpenExternal?: (dest: SettingsExternal) => void;
+}
+
+const SECTION_TITLES: Record<SettingsSection, string> = {
+  members: '成員與顏色',
+  account: '帳號與雲端同步',
+  sharing: '共享空間與配對碼',
+  google: 'Google 日曆',
+  notifications: '通知',
+  data: '資料備份與還原',
+  developer: '開發者選項',
+};
+
+const SettingsScreen: React.FC<Props> = ({ section, onBack, title, onOpenExternal }) => {
+  /** 自己管理的子頁(總覽模式下點一列進來的);有 section prop 時以它為準 */
+  const [sub, setSub] = useState<SettingsSection | null>(null);
+  const active = section ?? sub;
+  const show = (id: SettingsSection) => active === id;
   const {
     data,
     shared,
@@ -243,14 +290,121 @@ const SettingsScreen: React.FC = () => {
     });
   };
 
+  /** 總覽每一列右邊那句「目前狀態」 */
+  const statusOf = (id: SettingsSection): string => {
+    switch (id) {
+      case 'members':
+        return data.users.map((u) => u.name).join(' · ');
+      case 'account':
+        return authUser ? `已登入 ${authUser.email ?? ''}`.trim() : '未登入 · 本機模式';
+      case 'sharing':
+        return shared && data.settings.spaceId
+          ? `已配對 · ${data.settings.spaceId}`
+          : '尚未與伴侶配對';
+      case 'google':
+        if (!data.settings.googleConnected) return '未連接';
+        return permanent ? '已永久連接' : '已連接(授權約一小時後過期)';
+      case 'notifications': {
+        if (!data.settings.notificationsEnabled) return '推播關閉';
+        const parts = ['推播開啟'];
+        if (data.settings.courseRemindMinutes != null) {
+          parts.push(`上課前 ${data.settings.courseRemindMinutes} 分鐘`);
+        }
+        if (data.settings.crossDevicePush) parts.push('跨裝置推播');
+        return parts.join(' · ');
+      }
+      case 'data':
+        return '匯出 JSON · 從備份還原';
+      case 'developer':
+        return '測試 Token';
+    }
+  };
+
+  const overviewRow = (id: SettingsSection, i = 0) => (
+    <TouchableOpacity key={id} style={[s.navRow, i === 0 && s.navRowFirst]} onPress={() => setSub(id)}>
+      <View style={{ flex: 1 }}>
+        <Text style={s.navTitle}>{SECTION_TITLES[id]}</Text>
+        <Text style={s.navStatus} numberOfLines={1}>
+          {statusOf(id)}
+        </Text>
+      </View>
+      <Text style={s.navChevron}>›</Text>
+    </TouchableOpacity>
+  );
+
+  const externalRow = (dest: SettingsExternal, label: string, status: string) => (
+    <TouchableOpacity key={dest} style={s.navRow} onPress={() => onOpenExternal?.(dest)}>
+      <View style={{ flex: 1 }}>
+        <Text style={s.navTitle}>{label}</Text>
+        <Text style={s.navStatus} numberOfLines={1}>
+          {status}
+        </Text>
+      </View>
+      <Text style={s.navChevron}>›</Text>
+    </TouchableOpacity>
+  );
+
+  /* ── 總覽 ─────────────────────────────────────────── */
+  if (!active) {
+    const cardCount = visibleHomeCards(data.settings.homeCards).length;
+    const courseOwner =
+      data.users.find((u) => u.id === data.settings.homeCourseOwnerId) ??
+      data.users.find((u) => u.isPrimary) ??
+      data.users[0];
+    const navLabels = normalizeNavModules(data.settings.navModules)
+      .map((k) => moduleMeta(k).label)
+      .join(' · ');
+
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <ScreenHeader title="設定" onBack={onBack} />
+        <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 40, gap: spacing.md }}>
+          <View style={s.navCard}>{(['members'] as SettingsSection[]).map(overviewRow)}</View>
+
+          <View style={s.navCard}>
+            {(['account', 'sharing', 'google', 'notifications'] as SettingsSection[]).map(
+              overviewRow
+            )}
+            {!!onOpenExternal && (
+              <>
+                {externalRow('expenseSettings', '記帳設定', '上限 · 雙人算法 · 固定支出 · 分類')}
+                {externalRow(
+                  'homeCards',
+                  'Home 顯示內容',
+                  `${cardCount} 張卡片 · 課表顯示${courseOwner?.name ?? '—'}`
+                )}
+                {externalRow('pickModules', '導覽列功能', navLabels)}
+              </>
+            )}
+            {overviewRow('data')}
+          </View>
+
+          <View style={s.navCard}>{overviewRow('developer', 0)}</View>
+
+          <TouchableOpacity onPress={confirmReset} style={s.resetRow}>
+            <Text style={s.resetText}>清除所有資料</Text>
+          </TouchableOpacity>
+          <Text style={s.version}>Daily Bear</Text>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  /* ── 子頁 ─────────────────────────────────────────── */
+
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: colors.background }}
-      contentContainerStyle={{ padding: spacing.lg, paddingBottom: 40 }}
-    >
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <ScreenHeader
+        title={title ?? SECTION_TITLES[active]}
+        // 有 section prop = 從側邊選單直接進來的,返回要回到原本的地方;
+        // 否則是從總覽點進來的,返回就回總覽
+        onBack={section ? onBack : () => setSub(null)}
+      />
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 40 }}>
       {/* 成員 */}
-      <Card>
-        <SectionTitle>成員設定</SectionTitle>
+      {show('members') && (
+        <Card>
+          <SectionTitle>成員設定</SectionTitle>
         <Text style={s.hint}>
           兩位成員共用日曆與經期紀錄,行程與紀錄都會標記是誰的/誰記的。
           {shared ? '名稱與顏色會同步到對方裝置。' : ''}
@@ -274,11 +428,13 @@ const SettingsScreen: React.FC = () => {
             {u.isPrimary && <Text style={s.primaryTag}>經期紀錄對象</Text>}
           </View>
         ))}
-      </Card>
+        </Card>
+      )}
 
       {/* 帳號(雲端同步) */}
-      <Card>
-        <SectionTitle>帳號(雲端同步)</SectionTitle>
+      {show('account') && (
+        <Card>
+          <SectionTitle>帳號(雲端同步)</SectionTitle>
         {!firebaseAvailable ? (
           <Text style={s.hint}>尚未設定 Firebase,無法使用帳號功能。</Text>
         ) : authUser ? (
@@ -346,11 +502,13 @@ const SettingsScreen: React.FC = () => {
             </Text>
           </>
         )}
-      </Card>
+        </Card>
+      )}
 
       {/* 跨裝置共享 */}
-      <Card>
-        <SectionTitle>跨裝置共享(Firebase)</SectionTitle>
+      {show('sharing') && (
+        <Card>
+          <SectionTitle>跨裝置共享(Firebase)</SectionTitle>
         {!firebaseAvailable ? (
           <Text style={s.hint}>
             尚未設定 Firebase。請依 README 步驟建立 Firebase 專案,把設定貼進 src/config.ts
@@ -425,11 +583,13 @@ const SettingsScreen: React.FC = () => {
             <Button label="加入共享空間" variant="outline" onPress={() => void onJoinSpace()} disabled={working} />
           </>
         )}
-      </Card>
+        </Card>
+      )}
 
       {/* Google Calendar */}
-      <Card>
-        <SectionTitle>Google Calendar</SectionTitle>
+      {show('google') && (
+        <Card>
+          <SectionTitle>Google Calendar</SectionTitle>
         <Text style={s.hint}>
           狀態:
           {data.settings.googleConnected
@@ -491,22 +651,6 @@ const SettingsScreen: React.FC = () => {
             ) : (
               <Text style={s.hint}>尚未設定 Firebase,無法使用 Google 登入連接日曆。</Text>
             )}
-            <Text style={[s.hint, { marginTop: spacing.md }]}>開發測試:手動貼 Access Token</Text>
-            <TextInput
-              style={s.tokenInput}
-              value={token}
-              onChangeText={setToken}
-              placeholder="貼上 OAuth Playground 取得的 token"
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-            />
-            <Button
-              label="使用測試 Token 連接"
-              variant="outline"
-              onPress={() => {
-                if (token.trim()) setGoogleToken(token.trim());
-              }}
-            />
           </>
         ) : (
           <>
@@ -529,11 +673,13 @@ const SettingsScreen: React.FC = () => {
           連接後,行程開啟「同步到 Google 日曆」即自動同步;也可在 Google
           日曆建立共用日曆並將對方加為編輯者(見 README)。
         </Text>
-      </Card>
+        </Card>
+      )}
 
       {/* 通知 */}
-      <Card>
-        <SectionTitle>通知</SectionTitle>
+      {show('notifications') && (
+        <Card>
+          <SectionTitle>通知</SectionTitle>
         <View style={s.switchRow}>
           <Text style={s.switchLabel}>啟用推播通知</Text>
           <Switch
@@ -591,11 +737,13 @@ const SettingsScreen: React.FC = () => {
         )}
 
         <Button label="發送測試通知" variant="outline" onPress={() => void sendTestNotification()} />
-      </Card>
+        </Card>
+      )}
 
       {/* 資料 */}
-      <Card>
-        <SectionTitle>資料</SectionTitle>
+      {show('data') && (
+        <Card>
+          <SectionTitle>資料</SectionTitle>
         <Text style={s.hint}>
           {shared
             ? '資料即時同步至 Firebase,本機保留快取。'
@@ -607,10 +755,36 @@ const SettingsScreen: React.FC = () => {
         </Text>
         <Button label="⬆ 匯出備份" variant="outline" onPress={() => void doExport()} />
         <Button label="⬇ 從備份還原" variant="outline" onPress={() => void doImport()} />
+        </Card>
+      )}
 
-        <Button label="清除所有資料" variant="danger" onPress={confirmReset} />
-      </Card>
-    </ScrollView>
+      {/* 開發者選項:平常用不到的東西收在這裡,不再擠在 Google 那張卡裡 */}
+      {show('developer') && (
+        <Card>
+          <SectionTitle>開發者選項</SectionTitle>
+          <Text style={s.hint}>
+            這些是開發與測試用的工具,一般使用不需要碰。
+          </Text>
+          <Text style={[s.hint, { marginTop: spacing.md }]}>手動貼 Google Access Token</Text>
+          <TextInput
+            style={s.tokenInput}
+            value={token}
+            onChangeText={setToken}
+            placeholder="貼上 OAuth Playground 取得的 token"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+          />
+          <Button
+            label="使用測試 Token 連接"
+            variant="outline"
+            onPress={() => {
+              if (token.trim()) setGoogleToken(token.trim());
+            }}
+          />
+        </Card>
+      )}
+      </ScrollView>
+    </View>
   );
 };
 
@@ -641,6 +815,28 @@ const s = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   switchLabel: { fontSize: 14, color: colors.text, fontWeight: '600' },
+  navCard: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    paddingHorizontal: 14,
+  },
+  navRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 56,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  navTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
+  navStatus: { fontSize: 12, color: '#7A6570', marginTop: 2 },
+  navRowFirst: { borderTopWidth: 0 },
+  navChevron: { fontSize: 18, color: '#C9B8C0' },
+  resetRow: { alignItems: 'center', paddingVertical: 8 },
+  resetText: { fontSize: 14, fontWeight: '700', color: colors.danger },
+  version: { textAlign: 'center', fontSize: 12, color: '#7A6570' },
   tokenInput: {
     backgroundColor: colors.background,
     borderWidth: 1,

@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AppData } from '../types';
+import { AppData, DEFAULT_EXPENSE_CATEGORIES } from '../types';
 
 const KEY = 'daily-assistant:data:v1';
 
@@ -12,6 +12,10 @@ export const defaultData: AppData = {
   periods: [],
   courses: [],
   semesters: [],
+  expenses: [],
+  expenseCategories: DEFAULT_EXPENSE_CATEGORIES,
+  recurringExpenses: [],
+  graduation: [],
   settings: {
     notificationsEnabled: false,
     googleConnected: false,
@@ -21,6 +25,13 @@ export const defaultData: AppData = {
     periodFieldNames: [],
     customSymptoms: [],
     crossDevicePush: false,
+    budget: {},
+    sharedSplit: 'separate',
+    expenseKeypad: 'app',
+    recentExpenseNotes: [],
+    recurringSkips: [],
+    onboarded: false,
+    tutorialSeen: false,
   },
 };
 
@@ -32,6 +43,13 @@ export async function loadData(): Promise<AppData> {
     return {
       ...defaultData,
       ...parsed,
+      /*
+       * 分類是「舊版本升上來」唯一會出事的欄位:舊資料沒有 expenseCategories,
+       * 展開後是空陣列,記一筆就一格分類都沒有。缺少時補回預設。
+       */
+      expenseCategories: parsed.expenseCategories?.length
+        ? parsed.expenseCategories
+        : defaultData.expenseCategories,
       settings: { ...defaultData.settings, ...parsed.settings },
     };
   } catch {
