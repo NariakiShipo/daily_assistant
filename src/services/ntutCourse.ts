@@ -386,6 +386,18 @@ export function describeNtutSyncError(e: unknown): string {
     case 'deadline-exceeded':
       return '學校伺服器太久沒有回應,請稍後再試。';
     case 'internal':
+      // SDK 用大小寫區分兩種情況:
+      // - 'INTERNAL':後端有回應,但執行時拋出未處理的錯誤
+      // - 'internal':瀏覽器根本讀不到回應。網路斷線是一種,但更常見的是函式沒部署——
+      //   回 404 的頁面沒有 CORS 標頭,瀏覽器只會說「連線失敗」,原本的 not-found 判斷完全不會出現
+      if (message === 'INTERNAL') {
+        return '後端執行時發生錯誤,請到 Firebase 主控台查看 fetchNtutTimetable 的 log。';
+      }
+      return (
+        meaningful ||
+        '連不上 Daily Bear 的後端。網路正常的話,多半是後端還沒部署這個功能:' +
+          '請執行 npx firebase deploy --only functions。'
+      );
     case 'unavailable':
       return meaningful || '連不上 Daily Bear 的後端,請檢查網路後再試。';
   }

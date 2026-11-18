@@ -613,7 +613,20 @@ async function ssoCourseSystem(client) {
   const page = await client.request(`${PORTAL_BASE}ssoIndex.do?apOu=${encodeURIComponent(COURSE_AP_OU)}`);
   const form = parseSsoForm(page.text, page.url);
   if (!form) {
-    throw new NtutError('sso-failed', '入口網站沒有提供課程系統的登入表單,可能是登入失效或學校改版了。');
+    // 沒登入(或登入沒保持住)時 ssoIndex.do 回的不是表單,而是一小段 JSON:
+    // { "success" : false, "returnMsg" : "SESSION_TIMEOUT", "extraInfo" : null }(2026-11 實測)
+    let returnMsg = '';
+    try {
+      returnMsg = cleanMessage(JSON.parse(page.text)?.returnMsg);
+    } catch {
+      // 不是 JSON:學校改版或回了其他頁面
+    }
+    throw new NtutError(
+      'sso-failed',
+      returnMsg === 'SESSION_TIMEOUT'
+        ? '入口網站的登入沒有保持住(SESSION_TIMEOUT),請再試一次。'
+        : `入口網站沒有提供課程系統的登入表單,可能是登入失效或學校改版了${returnMsg ? `(${returnMsg})` : ''}。`
+    );
   }
   let res;
   if (form.method === 'POST') {

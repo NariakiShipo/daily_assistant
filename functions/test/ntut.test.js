@@ -41,6 +41,15 @@ const SSO_PAGE = `
 </form>
 </body></html>`;
 
+/*
+ * 以下兩段是 2026-11-18 對北科伺服器實測、沒登入時拿到的原始回應:
+ * ssoIndex.do 回 JSON;課程系統回一頁說明(UTF-8)。
+ */
+const SSO_TIMEOUT_JSON = '{ "success" : false, "returnMsg" : "SESSION_TIMEOUT", "extraInfo" : null }';
+const COURSE_NO_SESSION =
+  '<html><head><title>選課表</title></head><body>《尚未登錄入口網站》 或 《應用系統連線已逾時》!! ' +
+  '請由【入口網站】主畫面的選單，點選欲使用之系統!</body></html>';
+
 const STUDENT = '110590099';
 const PASSWORD = 'pw-才不告訴你!';
 
@@ -68,7 +77,7 @@ function fakeNtut(over = {}) {
         cookies: ['JSESSIONID=portal-1; Path=/; HttpOnly'],
       }),
     'GET app.ntut.edu.tw/ssoIndex.do': (u, init) =>
-      init.headers.Cookie?.includes('JSESSIONID=portal-1') ? html(over.ssoPage ?? SSO_PAGE) : html('請重新登入'),
+      init.headers.Cookie?.includes('JSESSIONID=portal-1') ? html(over.ssoPage ?? SSO_PAGE) : html(SSO_TIMEOUT_JSON),
     'POST app.ntut.edu.tw/oauth2Server.do': () =>
       over.oauthReply?.() ??
       redirect('https://aps.ntut.edu.tw/course/tw/courseSID.jsp?ticket=t-123', ['ssoTrace=1; Path=/']),
@@ -79,7 +88,7 @@ function fakeNtut(over = {}) {
         'lang=zh; Domain=.ntut.edu.tw; Path=/',
       ]),
     'GET aps.ntut.edu.tw/course/tw/Select.jsp': (u, init) => {
-      if (!init.headers.Cookie?.includes('JSESSIONID=course-9')) return html('您尚未登錄入口網站,或是連線已逾時');
+      if (!init.headers.Cookie?.includes('JSESSIONID=course-9')) return html(COURSE_NO_SESSION);
       if (u.searchParams.get('format') === '-2') return over.timetableReply?.(u) ?? html(TIMETABLE);
       return html(over.semesterPage ?? SEMESTER_PAGE);
     },
@@ -374,7 +383,7 @@ const rejectsWith = (promise, code) =>
   });
 
 test('流程:密碼錯誤就停在登入,不再打其他網址', async () => {
-  const { fetchImpl, calls } = fakeNtut({ loginBody: { success: false, errorMsg: '帳號或密碼錯誤,請重新輸入!' } });
+  const { fetchImpl, calls } = fakeNtut({ loginBody: { success: false, errorMsg: '帳號或密碼錯誤，請重新輸入。' } });
   await rejectsWith(fetchNtutTimetable({ studentId: STUDENT, password: PASSWORD }, { fetchImpl }), 'wrong-credentials');
   assert.equal(calls.length, 1);
 });
@@ -397,6 +406,14 @@ test('流程:login.do 回 HTML(維護頁)', async () => {
   await rejectsWith(fetchNtutTimetable({ studentId: STUDENT, password: PASSWORD }, { fetchImpl }), 'unexpected');
 });
 
+test('流程:入口網站回 SESSION_TIMEOUT(登入沒保持住)時說清楚', async () => {
+  const { fetchImpl } = fakeNtut({ ssoPage: SSO_TIMEOUT_JSON });
+  await assert.rejects(
+    fetchNtutTimetable({ studentId: STUDENT, password: PASSWORD }, { fetchImpl }),
+    (e) => e instanceof NtutError && e.code === 'sso-failed' && e.message.includes('SESSION_TIMEOUT')
+  );
+});
+
 test('流程:入口網站沒給 ssoForm', async () => {
   const { fetchImpl } = fakeNtut({ ssoPage: '<html>請重新登入</html>' });
   await rejectsWith(fetchNtutTimetable({ studentId: STUDENT, password: PASSWORD }, { fetchImpl }), 'sso-failed');
@@ -409,7 +426,7 @@ test('流程:SSO 轉完課程系統仍說沒登入', async () => {
 });
 
 test('流程:讀選課表時 session 過期', async () => {
-  const { fetchImpl } = fakeNtut({ timetableReply: () => html('應用系統連線已逾時,請重新登入') });
+  const { fetchImpl } = fakeNtut({ timetableReply: () => html(COURSE_NO_SESSION) });
   await rejectsWith(fetchNtutTimetable({ studentId: STUDENT, password: PASSWORD }, { fetchImpl }), 'session-expired');
 });
 

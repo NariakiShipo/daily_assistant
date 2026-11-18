@@ -179,7 +179,12 @@ test('錯誤訊息:後端帶 reason 時用後端的中文,再補一句下一步'
 test('錯誤訊息:callable 自己的錯誤要翻成人話', () => {
   // 函式沒部署:Firebase SDK 給的 message 只是代碼本身
   assert.match(describeNtutSyncError({ code: 'functions/not-found', message: 'NOT_FOUND' }), /部署 Functions/);
-  assert.match(describeNtutSyncError({ code: 'functions/internal', message: 'internal' }), /連不上/);
+  // 瀏覽器讀不到任何回應:網路斷線,或函式沒部署(回 404 但沒有 CORS 標頭,瀏覽器只說連線失敗)
+  const unreachable = describeNtutSyncError({ code: 'functions/internal', message: 'internal' });
+  assert.match(unreachable, /連不上/);
+  assert.match(unreachable, /firebase deploy --only functions/);
+  // 後端有回應,但執行時拋出未處理的錯誤
+  assert.match(describeNtutSyncError({ code: 'functions/internal', message: 'INTERNAL' }), /log/);
   assert.match(describeNtutSyncError({ code: 'functions/deadline-exceeded', message: 'deadline-exceeded' }), /太久/);
   assert.match(describeNtutSyncError({ code: 'functions/unauthenticated', message: 'unauthenticated' }), /登入帳號/);
   // 後端 requireUid 的中文訊息直接用
