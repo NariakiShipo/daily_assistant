@@ -39,5 +39,10 @@
     "@types/react": "~19.0.10",
     "typescript": "~5.8.3"
   },
+  "overrides": {
+    "@firebase/firestore": {
+      "@grpc/grpc-js": "^1.13.6"
+    }
+  },
   "private": true
 }
