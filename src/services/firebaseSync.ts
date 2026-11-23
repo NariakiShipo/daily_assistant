@@ -34,6 +34,7 @@ import {
   deleteField,
 } from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured } from '../config';
+import { expenseForSync } from './receipt';
 import {
   CalendarEvent,
   CourseEntry,
@@ -141,7 +142,9 @@ export async function uploadLocal(
   for (const ev of events) batch.set(doc(d, 'spaces', code, 'events', ev.id), ev);
   for (const p of periods) batch.set(doc(d, 'spaces', code, 'periods', p.id), p);
   for (const c of courses) batch.set(doc(d, 'spaces', code, 'courses', c.id), c);
-  for (const e of expenses ?? []) batch.set(doc(d, 'spaces', code, 'expenses', e.id), e);
+  for (const e of expenses ?? []) {
+    batch.set(doc(d, 'spaces', code, 'expenses', e.id), expenseForSync(e));
+  }
   await batch.commit();
   if (semesters?.length) await mergeSemesters(code, semesters);
   if (graduation?.length) await mergeGraduationPlans(code, graduation);
@@ -189,10 +192,14 @@ export async function saveRecurringExpenses(
   await setDoc(doc(d, 'spaces', code), { recurringExpenses: recurring }, { merge: true });
 }
 
+/**
+ * 帳目一律經過 expenseForSync 才寫上雲端:收據若是本機路徑或大到會撐破
+ * 單一文件 1MB 的上限,只拿掉收據,帳目本身照常同步(見 services/receipt.ts)。
+ */
 export async function saveExpenseDoc(code: string, e: Expense): Promise<void> {
   const d = getDb();
   if (!d) return;
-  await setDoc(doc(d, 'spaces', code, 'expenses', e.id), e);
+  await setDoc(doc(d, 'spaces', code, 'expenses', e.id), expenseForSync(e));
 }
 
 export async function deleteExpenseDoc(code: string, id: string): Promise<void> {
@@ -206,7 +213,7 @@ export async function saveExpenseDocs(code: string, list: Expense[]): Promise<vo
   const d = getDb();
   if (!d || !list.length) return;
   const batch = writeBatch(d);
-  for (const e of list) batch.set(doc(d, 'spaces', code, 'expenses', e.id), e);
+  for (const e of list) batch.set(doc(d, 'spaces', code, 'expenses', e.id), expenseForSync(e));
   await batch.commit();
 }
 

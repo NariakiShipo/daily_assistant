@@ -37,6 +37,7 @@ import * as push from '../services/push';
 import { mergeGoogleEvents, syncSummary } from '../services/googleSync';
 import { isFirebaseConfigured } from '../config';
 import { pendingRecurring } from '../services/expenses';
+import { keepLocalReceipts } from '../services/receipt';
 import { todayKey, uid } from '../utils/date';
 
 /** 記過的備註最多留這麼多個,再多也塞不進記一筆那一列 */
@@ -202,7 +203,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       onPeriods: (periods) => setData((d) => ({ ...d, periods })),
       onCourses: (courses) => setData((d) => ({ ...d, courses })),
       onSemesters: (semesters) => setData((d) => ({ ...d, semesters })),
-      onExpenses: (expenses) => setData((d) => ({ ...d, expenses })),
+      // 沒寫上雲端的收據(本機路徑、過大的舊照片)只存在這台裝置,整份取代前要補回去
+      onExpenses: (expenses) =>
+        setData((d) => ({ ...d, expenses: keepLocalReceipts(expenses, d.expenses) })),
       onExpenseCategories: (expenseCategories) => setData((d) => ({ ...d, expenseCategories })),
       onRecurringExpenses: (recurringExpenses) => setData((d) => ({ ...d, recurringExpenses })),
       onGraduation: (graduation) => setData((d) => ({ ...d, graduation })),
