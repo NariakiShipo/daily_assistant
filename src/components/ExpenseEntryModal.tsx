@@ -4,7 +4,7 @@
  * 照「簡單記帳」的最少步驟:點分類格 → 按金額 → 完成,三下就結束。
  * 備註、日期、付款方式、收據都收成一列膠囊擺在金額下面,想填才填,不擋主流程。
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
@@ -28,6 +28,7 @@ import {
 } from '../types';
 import { fromDateKey, todayKey, uid, weekdayZh } from '../utils/date';
 import { findCategory, selectableCategories } from '../services/expenses';
+import { shrinkReceipt } from '../services/receiptImage';
 import {
   CalcState,
   calcBackspace,
@@ -78,6 +79,9 @@ const ExpenseEntryModal: React.FC<Props> = ({
   const [date, setDate] = useState(defaultDate);
   const [payment, setPayment] = useState<PaymentMethod>('cash');
   const [receiptUri, setReceiptUri] = useState<string | undefined>(undefined);
+  const [receiptBusy, setReceiptBusy] = useState(false);
+  /** 每次打開表單就換一號;縮圖是非同步的,關掉再開別筆時,上一筆的照片不能附到這一筆 */
+  const openSeq = useRef(0);
   const [pickingDate, setPickingDate] = useState(false);
 
   const categories = useMemo(
@@ -88,6 +92,7 @@ const ExpenseEntryModal: React.FC<Props> = ({
   // 每次打開都重設,否則上一筆的金額會留在畫面上被誤記成這一筆
   useEffect(() => {
     if (!visible) return;
+    openSeq.current += 1;
     if (expense) {
       setKind(expense.kind);
       setWho(expense.who);
@@ -120,7 +125,8 @@ const ExpenseEntryModal: React.FC<Props> = ({
   const pending = calcPending(calc);
   // 0 元也記得起來(招待、全額折抵、換貨補 0 這種),只擋負數:金額欄沒有負號,
   // 會變負的只有「50 － 100」這種算到一半的式子,那顯然還沒輸入完。
-  const canSave = !!categoryId && amount >= 0;
+  // 收據還在縮圖時先不給存:這時按完成,照片會來不及附上而且沒有任何提示
+  const canSave = !!categoryId && amount >= 0 && !receiptBusy;
 
   const pickReceipt = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -132,7 +138,22 @@ const ExpenseEntryModal: React.FC<Props> = ({
       mediaTypes: ['images'],
       quality: 0.6,
     });
-    if (!res.canceled && res.assets[0]) setReceiptUri(res.assets[0].uri);
+    const picked = res.canceled ? undefined : res.assets[0];
+    if (!picked) return;
+    /*
+     * 不直接存選到的 uri:網頁版拿到的是整張原圖的 data: URI(手機拍的動輒數 MB),
+     * 跟著帳目寫進 Firestore 會超過單一文件 1MB 的上限,那筆帳就同步不出去。
+     */
+    const seq = openSeq.current;
+    setReceiptBusy(true);
+    try {
+      const uri = await shrinkReceipt(picked);
+      if (seq === openSeq.current) setReceiptUri(uri);
+    } catch {
+      notify('收據處理失敗', '這張照片沒辦法處理,換一張試試。');
+    } finally {
+      setReceiptBusy(false);
+    }
   };
 
   const save = () => {
@@ -312,6 +333,7 @@ const ExpenseEntryModal: React.FC<Props> = ({
               <TouchableOpacity
                 style={[s.receiptBtn, !!receiptUri && s.receiptBtnOn]}
                 onPress={() => void pickReceipt()}
+                disabled={receiptBusy}
                 accessibilityLabel={receiptUri ? '已附收據,點一下更換' : '附收據照片'}
               >
                 <Icon name="camera" size={16} color={receiptUri ? colors.primary : mutedSmall} />

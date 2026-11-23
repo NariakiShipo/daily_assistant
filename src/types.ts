@@ -463,7 +463,11 @@ export interface Expense {
   date: string;
   note?: string;
   payment: PaymentMethod;
-  /** 收據照片(本機 file:// 或 data:) */
+  /**
+   * 收據照片,存檔前已縮小(見 services/receiptImage)。
+   * 網頁是 data: URI,會跟著帳目同步;手機是本機的 file:// 路徑,只留在這台裝置,
+   * 不寫上雲端(見 services/receipt 的 expenseForSync)。
+   */
   receiptUri?: string;
   /** 由固定支出自動產生時,來源 RecurringExpense.id */
   recurringId?: string;
